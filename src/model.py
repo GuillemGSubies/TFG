@@ -18,7 +18,6 @@ class BaseNetwork(BaseEstimator):
     def __init__(self, tokenizer=Tokenizer()):
 
         self.tokenizer = tokenizer
-        self.net = Sequential()
 
     def etl(self, data):
 
@@ -86,6 +85,7 @@ class BaseNetwork(BaseEstimator):
         hidden_lstm=1,
     ):
 
+        self.net = Sequential()
         self.net.add(Embedding(self.total_words, 64, input_length=X_train.shape[1]))
 
         if arch == "Baseline":
