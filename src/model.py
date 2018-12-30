@@ -68,61 +68,13 @@ class BaseNetwork(BaseEstimator):
             seed_text += " " + output_word
         return seed_text
 
-
-class Baseline(BaseNetwork):
-    """Simple network with an embedding layer and a dense one"""
-
     def fit(
         self,
         X_train,
         X_test,
         y_train,
         y_test,
-        earlystop=None,
-        epochs=200,
-        batch_size=None,
-        verbose=2,
-        activation="softmax",
-        optimizer="adam",
-        loss="categorical_crossentropy",
-        metrics=[perplexity_raw],
-    ):
-
-        self.net.add(Embedding(self.total_words, 64, input_length=X_train.shape[1]))
-        self.net.add(Flatten())
-        self.net.add(Dense(self.total_words, activation=activation))
-
-        self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
-        print(self.net.summary())
-
-        if earlystop is True:
-            earlystop = [
-                EarlyStopping(
-                    monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
-                )
-            ]
-        self.net.fit(
-            X_train,
-            y_train,
-            epochs=epochs,
-            batch_size=None,
-            verbose=verbose,
-            callbacks=earlystop,
-            validation_data=(X_test, y_test),
-        )
-
-        return self
-
-
-class LSTM_Embedding(BaseNetwork):
-    """ LSTM Network """
-
-    def fit(
-        self,
-        X_train,
-        X_test,
-        y_train,
-        y_test,
+        arch="Baseline",
         earlystop=None,
         epochs=200,
         batch_size=None,
@@ -135,12 +87,14 @@ class LSTM_Embedding(BaseNetwork):
     ):
 
         self.net.add(Embedding(self.total_words, 64, input_length=X_train.shape[1]))
-        for _ in range(hidden_lstm):
-            self.net.add(
-                LSTM(32, input_shape=(self.max_sequence_len,), return_sequences=True)
-            )
-        self.net.add(LSTM(32, input_shape=(self.max_sequence_len,)))
-        self.net.add(Dense(self.total_words, activation=activation))
+
+        if arch == "Baseline":
+            self.Baseline(activation=activation)
+        elif arch == "LSTM_Embedding":
+            self.LSTM_Embedding(hidden_lstm=hidden_lstm, activation=activation)
+        else:
+            raise Exception("Unknown network architecture")
+
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
         print(self.net.summary())
 
@@ -159,5 +113,23 @@ class LSTM_Embedding(BaseNetwork):
             callbacks=earlystop,
             validation_data=(X_test, y_test),
         )
+
+    def Baseline(self, activation):
+        """Simple network with an embedding layer and a dense one"""
+
+        self.net.add(Flatten())
+        self.net.add(Dense(self.total_words, activation=activation))
+
+        return self
+
+    def LSTM_Embedding(self, hidden_lstm, activation):
+        """ LSTM Network """
+
+        for _ in range(hidden_lstm):
+            self.net.add(
+                LSTM(32, input_shape=(self.max_sequence_len,), return_sequences=True)
+            )
+        self.net.add(LSTM(32, input_shape=(self.max_sequence_len,)))
+        self.net.add(Dense(self.total_words, activation=activation))
 
         return self
