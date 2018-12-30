@@ -11,6 +11,7 @@ from keras.preprocessing.text import Tokenizer
 from sklearn.base import BaseEstimator
 
 from .metrics import perplexity_raw
+from .utils import train_test_split
 
 
 class BaseNetwork(BaseEstimator):
@@ -47,9 +48,8 @@ class BaseNetwork(BaseEstimator):
         # create X and y
         X, y = input_sequences[:, :-1], input_sequences[:, -1]
         y = ku.to_categorical(y, num_classes=self.total_words)
-        print(f"Shape of X: {X.shape}")
-        print(f"Shape of y: {y.shape}")
-        return X, y
+
+        return train_test_split(X, y)
 
     def generate_text(self, seed_text, next_words):
 
@@ -74,19 +74,21 @@ class Baseline(BaseNetwork):
 
     def fit(
         self,
-        X,
-        y,
+        X_train,
+        X_test,
+        y_train,
+        y_test,
         earlystop=False,
         epochs=200,
         batch_size=None,
-        verbose=1,
+        verbose=2,
         activation="softmax",
         optimizer="adam",
         loss="categorical_crossentropy",
         metrics=[perplexity_raw],
     ):
 
-        self.net.add(Embedding(self.total_words, 64, input_length=X.shape[1]))
+        self.net.add(Embedding(self.total_words, 64, input_length=X_train.shape[1]))
         self.net.add(Flatten())
         self.net.add(Dense(self.total_words, activation=activation))
 
@@ -97,15 +99,23 @@ class Baseline(BaseNetwork):
                 monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
             )
             self.net.fit(
-                X,
-                y,
+                X_train,
+                y_train,
                 epochs=epochs,
                 batch_size=None,
                 verbose=verbose,
                 callbacks=[earlystop],
+                validation_data=(X_test, y_test),
             )
         else:
-            self.net.fit(X, y, epochs=epochs, batch_size=None, verbose=verbose)
+            self.net.fit(
+                X_train,
+                y_train,
+                epochs=epochs,
+                batch_size=None,
+                verbose=verbose,
+                validation_data=(X_test, y_test),
+            )
 
         return self
 
@@ -115,12 +125,14 @@ class LSTM_Embedding(BaseNetwork):
 
     def fit(
         self,
-        X,
-        y,
+        X_train,
+        X_test,
+        y_train,
+        y_test,
         earlystop=False,
         epochs=200,
         batch_size=None,
-        verbose=1,
+        verbose=2,
         activation="softmax",
         optimizer="adam",
         loss="categorical_crossentropy",
@@ -128,7 +140,7 @@ class LSTM_Embedding(BaseNetwork):
         hidden_lstm=1,
     ):
 
-        self.net.add(Embedding(self.total_words, 64))
+        self.net.add(Embedding(self.total_words, 64, input_length=X_train.shape[1]))
         for _ in range(hidden_lstm):
             self.net.add(
                 LSTM(32, input_shape=(self.max_sequence_len,), return_sequences=True)
@@ -142,14 +154,22 @@ class LSTM_Embedding(BaseNetwork):
                 monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
             )
             self.net.fit(
-                X,
-                y,
+                X_train,
+                y_train,
                 epochs=epochs,
                 batch_size=None,
                 verbose=verbose,
                 callbacks=[earlystop],
+                validation_data=(X_test, y_test),
             )
         else:
-            self.net.fit(X, y, epochs=epochs, batch_size=None, verbose=verbose)
+            self.net.fit(
+                X_train,
+                y_train,
+                epochs=epochs,
+                batch_size=None,
+                verbose=verbose,
+                validation_data=(X_test, y_test),
+            )
 
         return self
