@@ -78,7 +78,7 @@ class Baseline(BaseNetwork):
         X_test,
         y_train,
         y_test,
-        earlystop=False,
+        earlystop=None,
         epochs=200,
         batch_size=None,
         verbose=2,
@@ -94,28 +94,22 @@ class Baseline(BaseNetwork):
 
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
         print(self.net.summary())
-        if earlystop:
-            earlystop = EarlyStopping(
-                monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
-            )
-            self.net.fit(
-                X_train,
-                y_train,
-                epochs=epochs,
-                batch_size=None,
-                verbose=verbose,
-                callbacks=[earlystop],
-                validation_data=(X_test, y_test),
-            )
-        else:
-            self.net.fit(
-                X_train,
-                y_train,
-                epochs=epochs,
-                batch_size=None,
-                verbose=verbose,
-                validation_data=(X_test, y_test),
-            )
+
+        if earlystop is True:
+            earlystop = [
+                EarlyStopping(
+                    monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
+                )
+            ]
+        self.net.fit(
+            X_train,
+            y_train,
+            epochs=epochs,
+            batch_size=None,
+            verbose=verbose,
+            callbacks=earlystop,
+            validation_data=(X_test, y_test),
+        )
 
         return self
 
@@ -129,7 +123,7 @@ class LSTM_Embedding(BaseNetwork):
         X_test,
         y_train,
         y_test,
-        earlystop=False,
+        earlystop=None,
         epochs=200,
         batch_size=None,
         verbose=2,
@@ -149,27 +143,21 @@ class LSTM_Embedding(BaseNetwork):
         self.net.add(Dense(self.total_words, activation=activation))
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
         print(self.net.summary())
-        if earlystop:
-            earlystop = EarlyStopping(
-                monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
-            )
-            self.net.fit(
-                X_train,
-                y_train,
-                epochs=epochs,
-                batch_size=None,
-                verbose=verbose,
-                callbacks=[earlystop],
-                validation_data=(X_test, y_test),
-            )
-        else:
-            self.net.fit(
-                X_train,
-                y_train,
-                epochs=epochs,
-                batch_size=None,
-                verbose=verbose,
-                validation_data=(X_test, y_test),
-            )
+
+        if earlystop is True:
+            earlystop = [
+                EarlyStopping(
+                    monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
+                )
+            ]
+        self.net.fit(
+            X_train,
+            y_train,
+            epochs=epochs,
+            batch_size=None,
+            verbose=verbose,
+            callbacks=earlystop,
+            validation_data=(X_test, y_test),
+        )
 
         return self
