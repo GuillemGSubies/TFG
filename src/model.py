@@ -14,9 +14,12 @@ from .utils import train_test_split
 
 
 class BaseNetwork(BaseEstimator):
-    def __init__(self, tokenizer=Tokenizer()):
-
+    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=300):
+        """ AÑADIR MAS INFO
+        usamos el max_sequence_len porque así si la longitud máxima de una frase es descabellada
+        nos cubrimos las espaldas"""
         self.tokenizer = tokenizer
+        self.max_sequence_len = max_sequence_len
 
     def etl(self, data):
 
@@ -30,13 +33,12 @@ class BaseNetwork(BaseEstimator):
         # create input sequences using list of tokens
         input_sequences = []
         for line in corpus:
-            # TODO: Probar con fastText y HashingVectorizer y los demás de text de keras.
             token_list = self.tokenizer.texts_to_sequences([line])[0]
             for i in range(1, len(token_list)):
                 input_sequences.append(token_list[: i + 1])
 
         # pad sequences
-        self.max_sequence_len = max([len(x) for x in input_sequences])
+        self.max_sequence_len = min(max([len(x) for x in input_sequences]), self.max_sequence_len)
         input_sequences = np.array(
             pad_sequences(
                 input_sequences, maxlen=self.max_sequence_len, padding="pre", value=0
@@ -99,7 +101,7 @@ class BaseNetwork(BaseEstimator):
         X_test,
         y_train,
         y_test,
-        batch_size=16,
+        batch_size=32,
         earlystop=None,
         epochs=200,
         verbose=1,
@@ -169,3 +171,4 @@ def normalize(probs):
     """Normalizes a list of probabilities, so that they sum up to 1"""
     prob_factor = 1 / sum(probs)
     return [prob_factor * p for p in probs]
+
