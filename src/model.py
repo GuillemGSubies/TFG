@@ -14,7 +14,7 @@ from .utils import train_test_split
 
 
 class BaseNetwork(BaseEstimator):
-    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=300):
+    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=301):
         """ AÑADIR MAS INFO
         usamos el max_sequence_len porque así si la longitud máxima de una frase es descabellada
         nos cubrimos las espaldas"""
@@ -38,7 +38,9 @@ class BaseNetwork(BaseEstimator):
                 input_sequences.append(token_list[: i + 1])
 
         # pad sequences
-        self.max_sequence_len = min(max([len(x) for x in input_sequences]), self.max_sequence_len)
+        self.max_sequence_len = min(
+            max([len(x) for x in input_sequences]), self.max_sequence_len
+        )
         input_sequences = np.array(
             pad_sequences(
                 input_sequences, maxlen=self.max_sequence_len, padding="pre", value=0
@@ -58,19 +60,17 @@ class BaseNetwork(BaseEstimator):
                 [token_list], maxlen=self.max_sequence_len - 1, padding="pre"
             )
             predicted = self.net.predict(token_list, verbose=0)[0]
-            predicted = sample(np.log(predicted), 0.5)
-            output_word = ""
-            for word, index in self.tokenizer.word_index.items():
-                if index == predicted:
-                    output_word = word
-                    break
-            seed_text += " " + output_word
+            sampled_predicted = sample(np.log(predicted), 0.5)
+            seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+
         return seed_text
 
     def compile(
         self,
         activation="softmax",
         arch="Baseline",
+        embedding=None,
+        embedding_output_dim=64,
         gpu=False,
         loss="categorical_crossentropy",
         metrics=[perplexity_raw],
@@ -80,8 +80,34 @@ class BaseNetwork(BaseEstimator):
     ):
 
         self.net = Sequential()
+
+        # Embeddign layer
+        output_dim = embedding_output_dim
+        trainable = True
+        weights = None
+        if embedding == "fastText":
+            fastText_file = "crawl-300d-2M.vec"
+            try:
+                embeddings = self.load_vectors_words(fastText_file)
+                print("Embedding file loaded sucessfully!")
+            except:
+                print(
+                    "Are you sure that you downloaded the embeddings? The model will work without fastText"
+                )
+            else:
+                embedding_matrix = self.create_embedding_matrix(embeddings)
+                output_dim = embedding_matrix.shape[1]
+                trainable = False
+                weights = [embedding_matrix]
+
         self.net.add(
-            Embedding(self.total_words, 64, input_length=self.max_sequence_len - 1)
+            Embedding(
+                input_dim=self.total_words,
+                output_dim=output_dim,
+                input_length=self.max_sequence_len - 1,
+                trainable=trainable,
+                weights=weights,
+            )
         )
 
         if arch == "Baseline":
@@ -93,6 +119,7 @@ class BaseNetwork(BaseEstimator):
 
         self.net.add(Dense(self.total_words, activation=activation))
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
+
         print(self.summary())
 
     def fit(
@@ -113,6 +140,7 @@ class BaseNetwork(BaseEstimator):
                     monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
                 )
             ]
+        print("The fit process is starting!")
         self.net.fit(
             X_train,
             y_train,
@@ -158,6 +186,36 @@ class BaseNetwork(BaseEstimator):
     def summary(self):
         return self.net.summary()
 
+    def load_vectors_words(self, fname):
+        """Loads embeddings from a FastText file. Only loads embeddings for the given dictionary of words"""
+        data = {}
+        with open(fname) as fin:
+            next(fin)  # Skip first line, just contains embeddings size data
+            for line in fin:
+                tokens = line.rstrip().split(" ")
+                word = tokens[0]
+                if word in self.tokenizer.word_index:
+                    data[word] = np.array(list(map(float, tokens[1:])))
+        return data
+
+    def create_embedding_matrix(self, embeddings):
+        """Creates a weight matrix for an Embedding layer using an embeddings dictionary and a Tokenizer"""
+
+        # Compute mean and standard deviation for embeddings
+        all_embs = np.stack(embeddings.values())
+        emb_mean, emb_std = all_embs.mean(), all_embs.std()
+        embedding_size = len(next(iter(embeddings.values())))
+        embedding_matrix = np.random.normal(emb_mean, emb_std, (self.total_words, embedding_size))
+        for word, i in self.tokenizer.word_index.items():
+            if i >= self.total_words:
+                break
+            embedding_vector = embeddings.get(word)
+            if embedding_vector is not None:
+                embedding_matrix[i] = embedding_vector
+
+        return embedding_matrix
+
+
 
 def sample(logprobs, temperature=1.0):
     """Modifies probabilities with a given temperature, to add creativity
@@ -171,4 +229,3 @@ def normalize(probs):
     """Normalizes a list of probabilities, so that they sum up to 1"""
     prob_factor = 1 / sum(probs)
     return [prob_factor * p for p in probs]
-
