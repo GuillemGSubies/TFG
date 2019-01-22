@@ -39,7 +39,7 @@ class BaseNetwork(BaseEstimator):
 
         # pad sequences
         self.max_sequence_len = min(
-            max([len(x) for x in input_sequences]), self.max_sequence_len
+            len(max(input_sequences, key=len)), self.max_sequence_len
         )
         input_sequences = np.array(
             pad_sequences(
