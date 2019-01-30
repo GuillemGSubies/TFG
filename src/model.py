@@ -1,25 +1,92 @@
+from itertools import islice
+
 import keras.utils as ku
 import numpy as np
-
 from keras.callbacks import EarlyStopping
+from keras.layers import LSTM, Bidirectional, Dense, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import CuDNNLSTM, Bidirectional, Dense, Flatten, LSTM
 from keras.models import Sequential
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.base import BaseEstimator
 
 from .metrics import perplexity_raw
-from .utils import train_test_split
+
+
+def batchedgenerator(generatorfunction):
+    """Decorator that makes a pattern generator produce patterns in batches
+    A "batchsize" parameter is added to the generator, that if specified
+    groups the data in batches of such size.
+    
+    It is expected that the generator returns instances of data patterns,
+    as tuples of numpy arrays (X,y)
+    """
+
+    def modgenerator(*args, **kwargs):
+        if "batchsize" in kwargs:
+            batchsize = kwargs["batchsize"]
+            del kwargs["batchsize"]
+        else:
+            batchsize = 1
+        for batch in splitevery(generatorfunction(*args, **kwargs), batchsize):
+            yield batch
+
+    return modgenerator
+
+
+def batchedpatternsgenerator(generatorfunction):
+    """Decorator that assumes patterns (X,y) and stacks them in batches
+    
+    This can be thought of a specialized version of the batchedgenerator
+    that assumes the base generator returns instances of data patterns,
+    as tuples of numpy arrays (X,y). When grouping them in batches the
+    numpy arrays are stacked so that each returned batch has a pattern 
+    per row.
+    
+    A "batchsize" parameter is added to the generator, that if specified
+    groups the data in batches of such size.
+    """
+
+    def modgenerator(*args, **kwargs):
+        for batch in batchedgenerator(generatorfunction)(*args, **kwargs):
+            Xb, yb = zip(*batch)
+            yield np.stack(Xb), np.stack(yb)
+
+    return modgenerator
+
+
+def infinitegenerator(generatorfunction):
+    """Decorator that makes a generator replay indefinitely
+    
+    An "infinite" parameter is added to the generator, that if set to True
+    makes the generator loop indifenitely.    
+    """
+
+    def infgenerator(*args, **kwargs):
+        if "infinite" in kwargs:
+            infinite = kwargs["infinite"]
+            del kwargs["infinite"]
+        else:
+            infinite = False
+        if infinite == True:
+            while True:
+                for elem in generatorfunction(*args, **kwargs):
+                    yield elem
+        else:
+            for elem in generatorfunction(*args, **kwargs):
+                yield elem
+
+    return infgenerator
 
 
 class BaseNetwork(BaseEstimator):
-    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=301):
+    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=301, batchsize=32):
         """ AÑADIR MAS INFO
         usamos el max_sequence_len porque así si la longitud máxima de una frase es descabellada
         nos cubrimos las espaldas"""
         self.tokenizer = tokenizer
         self.max_sequence_len = max_sequence_len
+        self.batchsize = batchsize
 
     def etl(self, data):
 
@@ -30,27 +97,42 @@ class BaseNetwork(BaseEstimator):
         self.tokenizer.fit_on_texts(corpus)
         self.total_words = len(self.tokenizer.word_index) + 1
 
-        # create input sequences using list of tokens
-        input_sequences = []
-        for line in corpus:
-            token_list = self.tokenizer.texts_to_sequences([line])[0]
-            for i in range(1, len(token_list)):
-                input_sequences.append(token_list[: i + 1])
+        self.num_train_samples = len(list(self.patterngenerator(corpus, batchsize=self.batchsize, count=True)))
 
-        # pad sequences
+    def patterngenerator(self, corpus, **kwargs):
+        """Infinite generator of encoded patterns.
+        
+        Arguments
+            - corpus: iterable of strings making up the corpus
+            - **kwargs: any other arguments are passed on to decodetext
+        """
+        # Pre-tokenized all corpus documents, for efficiency
+        tokenizedcorpus = self.tokenizer.texts_to_sequences(corpus)
         self.max_sequence_len = min(
-            len(max(input_sequences, key=len)), self.max_sequence_len
+            len(max(tokenizedcorpus, key=len)), self.max_sequence_len
         )
-        input_sequences = np.array(
-            pad_sequences(
-                input_sequences, maxlen=self.max_sequence_len, padding="pre", value=0
-            )
-        )
-        # create X and y
-        X, y = input_sequences[:, :-1], input_sequences[:, -1]
-        y = ku.to_categorical(y, num_classes=self.total_words)
+        for pattern in self._tokenizedpatterngenerator(tokenizedcorpus, **kwargs):
+            yield pattern
 
-        return train_test_split(X, y)
+    @infinitegenerator
+    @batchedpatternsgenerator
+    def _tokenizedpatterngenerator(self, tokenizedcorpus, **kwargs):
+        for token_list in tokenizedcorpus:
+            for i in range(1, len(token_list)):
+                sample = np.array(
+                    pad_sequences(
+                        [token_list[: i + 1]],
+                        maxlen=self.max_sequence_len,
+                        padding="pre",
+                        value=0,
+                    )
+                )
+                X, y = sample[:, :-1], sample[:, -1]
+                y = ku.to_categorical(y, num_classes=self.total_words)
+                if "count" in kwargs and kwargs["count"] is True:
+                    yield 0, 0
+                else:
+                    yield X[0], y[0]
 
     def generate_text(self, seed_text, next_words):
 
@@ -62,8 +144,6 @@ class BaseNetwork(BaseEstimator):
             predicted = self.net.predict(token_list, verbose=0)[0]
             sampled_predicted = sample(np.log(predicted), 0.5)
             seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
-
-        return seed_text
 
     def compile(
         self,
@@ -124,13 +204,12 @@ class BaseNetwork(BaseEstimator):
 
     def fit(
         self,
-        X_train,
-        X_test,
-        y_train,
-        y_test,
-        batch_size=32,
+        corpus,
         earlystop=None,
         epochs=200,
+        max_queue_size=1000, #qué debería poner?
+        shuffle=False,
+        use_multiprocessing=True,
         verbose=1,
     ):
 
@@ -141,14 +220,16 @@ class BaseNetwork(BaseEstimator):
                 )
             ]
         print("The fit process is starting!")
-        self.net.fit(
-            X_train,
-            y_train,
-            batch_size=batch_size,
+        self.net.fit_generator(
+            self.patterngenerator(corpus, batchsize=batchsize, infinite=True),
+            steps_per_epoch=self.num_train_samples,
             callbacks=earlystop,
             epochs=epochs,
-            validation_data=(X_test, y_test),
+            # validation_data=self.patterngenerator(corpus, batchsize=batchsize, infinite=True),
             verbose=verbose,
+            max_queue_size=max_queue_size,
+            use_multiprocessing=use_multiprocessing,
+            shuffle=shuffle,
         )
 
     def Baseline(self):
@@ -161,7 +242,11 @@ class BaseNetwork(BaseEstimator):
     def LSTM_Embedding(self, gpu, hidden_lstm, lstm_units):
         """ LSTM Network """
 
-        lstm = CuDNNLSTM if gpu else LSTM
+        if gpu:
+            from keras.layers import CuDNNLSTM
+            lstm = CuDNNLSTM
+        else:
+            lstm = LSTM
         return_sequences = False if hidden_lstm == 0 else True
 
         layer = lstm(
@@ -205,7 +290,9 @@ class BaseNetwork(BaseEstimator):
         all_embs = np.stack(embeddings.values())
         emb_mean, emb_std = all_embs.mean(), all_embs.std()
         embedding_size = len(next(iter(embeddings.values())))
-        embedding_matrix = np.random.normal(emb_mean, emb_std, (self.total_words, embedding_size))
+        embedding_matrix = np.random.normal(
+            emb_mean, emb_std, (self.total_words, embedding_size)
+        )
         for word, i in self.tokenizer.word_index.items():
             if i >= self.total_words:
                 break
@@ -214,7 +301,6 @@ class BaseNetwork(BaseEstimator):
                 embedding_matrix[i] = embedding_vector
 
         return embedding_matrix
-
 
 
 def sample(logprobs, temperature=1.0):
@@ -229,3 +315,12 @@ def normalize(probs):
     """Normalizes a list of probabilities, so that they sum up to 1"""
     prob_factor = 1 / sum(probs)
     return [prob_factor * p for p in probs]
+
+
+def splitevery(iterable, n):
+    """Returns blocks of elements from an iterator"""
+    i = iter(iterable)
+    piece = list(islice(i, n))
+    while piece:
+        yield piece
+        piece = list(islice(i, n))
