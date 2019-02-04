@@ -3,13 +3,12 @@ from itertools import islice
 import keras.utils as ku
 import numpy as np
 from keras.callbacks import EarlyStopping
-from keras.layers import LSTM, Bidirectional, Dense, Flatten
+from keras.layers import LSTM, Bidirectional, CuDNNLSTM, Dense, Flatten
 from keras.layers.embeddings import Embedding
-from keras.models import Sequential
+from keras.models import load_model, Sequential
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.base import BaseEstimator
-
 from .metrics import perplexity_raw
 
 
@@ -98,7 +97,12 @@ class BaseNetwork(BaseEstimator):
         self.total_words = len(self.tokenizer.word_index) + 1
 
         # Total samples
-        self.num_train_samples = len(list(self.patterngenerator(corpus, batchsize=self.batchsize, count=True)))
+        self.num_train_samples = len(
+            list(self.patterngenerator(corpus, batchsize=self.batchsize, count=True))
+        )
+
+        print(f"There are a total of {self.num_train_samples} training samples")
+        # print(f"There are a total of {self.num_train_samples} validation samples")
 
         return corpus
 
@@ -158,13 +162,12 @@ class BaseNetwork(BaseEstimator):
         loss="categorical_crossentropy",
         metrics=[perplexity_raw],
         optimizer="adam",
-        hidden_lstm=0,
-        lstm_units=32,
+        lstm=[32],
     ):
 
         self.net = Sequential()
 
-        # Embeddign layer
+        # Embedding layer
         output_dim = embedding_output_dim
         trainable = True
         weights = None
@@ -196,7 +199,7 @@ class BaseNetwork(BaseEstimator):
         if arch == "Baseline":
             self.Baseline()
         elif arch == "LSTM_Embedding":
-            self.LSTM_Embedding(gpu=gpu, hidden_lstm=hidden_lstm, lstm_units=lstm_units)
+            self.LSTM_Embedding(gpu=gpu, lstm_arch=lstm)
         else:
             raise Exception("Unknown network architecture")
 
@@ -210,11 +213,42 @@ class BaseNetwork(BaseEstimator):
         corpus,
         earlystop=None,
         epochs=200,
-        max_queue_size=1000, #qué debería poner?
+        max_queue_size=1000,  # qué debería poner?
+        save=False,
         shuffle=False,
         use_multiprocessing=True,
         verbose=1,
     ):
+
+        """Fits the model with given data. It uses generators to create train an test samples
+
+        Parameters
+        ----------
+        corpus : list of str
+            Dataset to train the model.
+        earlystop : bool or callable, optional
+            If False no callbacks will be used. If True, a simple EarlyStopping will be used.
+            A custom callback method can also be passed to the fit method.
+        epochs : int, optional
+            Number of train epochs. 
+        max_queue_size : int, optional
+            TODO
+        save : str or bool
+            Whether to save or not the model in a file. If False it will not be saved.
+            If strm it will be saved in path=str.
+        shuffle : bool, optional
+            Wether so shufle or not train samples during the training process.
+        use_multiprocessing : bool, optional
+            TODO
+        verbose : int, optional
+            TODO
+
+        Returns
+        -----
+        data : dict
+            Embedding dict
+
+        """
 
         if earlystop is True:
             earlystop = [
@@ -234,6 +268,8 @@ class BaseNetwork(BaseEstimator):
             use_multiprocessing=use_multiprocessing,
             shuffle=shuffle,
         )
+        if save != False:
+            self.save(save)
 
     def Baseline(self):
         """Simple network with an embedding layer and a dense one"""
@@ -242,40 +278,70 @@ class BaseNetwork(BaseEstimator):
 
         return self
 
-    def LSTM_Embedding(self, gpu, hidden_lstm, lstm_units):
-        """ LSTM Network """
+    def LSTM_Embedding(self, gpu, lstm_arch):
+        """This Network consists in a embedding layer followed by a bidirectional
+        LSTM and some number of hidden LSTM. There is a dense layer at the end.
 
-        if gpu:
-            from keras.layers import CuDNNLSTM
-            lstm = CuDNNLSTM
-        else:
-            lstm = LSTM
-        return_sequences = False if hidden_lstm == 0 else True
 
+        Parameters
+        ----------
+        gpu : bool
+            If True, CuDNNLSTM networks will be used in stead of LSTM
+        lstm_arch : list of int
+            len(lstm_arch) will be the number of LSTM layers in the model (being the
+            first one, bidirectional) and every elem in lstm_arch is the number of
+            neurons for the ith layer.
+
+        Returns
+        -----
+        self
+        """
+
+        lstm = CuDNNLSTM if gpu else LSTM
+
+        # Bidirectional layer
         layer = lstm(
-            lstm_units,
+            lstm_arch.pop(0),
             input_shape=(self.max_sequence_len,),
-            return_sequences=return_sequences,
+            return_sequences=False if len(lstm_arch) == 0 else True,
         )
         self.net.add(Bidirectional(layer, merge_mode="concat"))
-        for _ in range(hidden_lstm - 1):
+
+        # Hidden layers
+        for i, elem in enumerate(lstm_arch):
             self.net.add(
                 lstm(
-                    lstm_units,
+                    elem,
                     input_shape=(self.max_sequence_len,),
-                    return_sequences=True,
+                    return_sequences=True if i < len(lstm_arch) - 1 else False,
                 )
             )
-        if hidden_lstm >= 1:
-            self.net.add(lstm(lstm_units, input_shape=(self.max_sequence_len,)))
 
         return self
 
     def summary(self):
+        """Wrapper method for keras' sequential model summary"""
         return self.net.summary()
 
+    def save(self, path):
+        """Wrapper method for keras' sequential model save"""
+        return self.net.save(path)
+
     def load_vectors_words(self, fname):
-        """Loads embeddings from a FastText file. Only loads embeddings for the given dictionary of words"""
+        """Loads embeddings from a FastText file. Only loads embeddings for the given dictionary of words
+
+        Parameters
+        ----------
+        fname : str
+            Location of the embbeding file
+
+        Returns
+        -----
+        data : dict
+            Embedding dict
+
+        """
+
         data = {}
         with open(fname) as fin:
             next(fin)  # Skip first line, just contains embeddings size data
@@ -305,6 +371,18 @@ class BaseNetwork(BaseEstimator):
 
         return embedding_matrix
 
+
+def load_model(path):
+    """PROVISIONAL Wrapper method for keras' sequential model load_model"""
+    return load_model(path)
+
+    # @classmethod
+    # def load_model(cls, path):
+    # TODO: Esto es más complicado de lo que parece ya que habría que guardar también el tokenizador en algún sitio también
+    #     """Wrapper method for keras' load_model"""
+
+    #     model = cls()
+    #     return load_model(path)
 
 def sample(logprobs, temperature=1.0):
     """Modifies probabilities with a given temperature, to add creativity
