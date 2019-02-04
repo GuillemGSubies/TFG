@@ -97,7 +97,10 @@ class BaseNetwork(BaseEstimator):
         self.tokenizer.fit_on_texts(corpus)
         self.total_words = len(self.tokenizer.word_index) + 1
 
+        # Total samples
         self.num_train_samples = len(list(self.patterngenerator(corpus, batchsize=self.batchsize, count=True)))
+
+        return corpus
 
     def patterngenerator(self, corpus, **kwargs):
         """Infinite generator of encoded patterns.
@@ -221,7 +224,7 @@ class BaseNetwork(BaseEstimator):
             ]
         print("The fit process is starting!")
         self.net.fit_generator(
-            self.patterngenerator(corpus, batchsize=batchsize, infinite=True),
+            self.patterngenerator(corpus, batchsize=self.batchsize, infinite=True),
             steps_per_epoch=self.num_train_samples,
             callbacks=earlystop,
             epochs=epochs,
