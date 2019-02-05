@@ -1,156 +1,100 @@
-from itertools import islice
-
 import keras.utils as ku
 import numpy as np
 from keras.callbacks import EarlyStopping
 from keras.layers import LSTM, Bidirectional, CuDNNLSTM, Dense, Flatten
 from keras.layers.embeddings import Embedding
-from keras.models import load_model, Sequential
+from keras.models import Sequential, load_model
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.base import BaseEstimator
+
+from .generators import batchedpatternsgenerator, infinitegenerator, maskedgenerator
 from .metrics import perplexity_raw
-
-
-def batchedgenerator(generatorfunction):
-    """Decorator that makes a pattern generator produce patterns in batches
-    A "batchsize" parameter is added to the generator, that if specified
-    groups the data in batches of such size.
-    
-    It is expected that the generator returns instances of data patterns,
-    as tuples of numpy arrays (X,y)
-    """
-
-    def modgenerator(*args, **kwargs):
-        if "batchsize" in kwargs:
-            batchsize = kwargs["batchsize"]
-            del kwargs["batchsize"]
-        else:
-            batchsize = 1
-        for batch in splitevery(generatorfunction(*args, **kwargs), batchsize):
-            yield batch
-
-    return modgenerator
-
-
-def batchedpatternsgenerator(generatorfunction):
-    """Decorator that assumes patterns (X,y) and stacks them in batches
-    
-    This can be thought of a specialized version of the batchedgenerator
-    that assumes the base generator returns instances of data patterns,
-    as tuples of numpy arrays (X,y). When grouping them in batches the
-    numpy arrays are stacked so that each returned batch has a pattern 
-    per row.
-    
-    A "batchsize" parameter is added to the generator, that if specified
-    groups the data in batches of such size.
-    """
-
-    def modgenerator(*args, **kwargs):
-        for batch in batchedgenerator(generatorfunction)(*args, **kwargs):
-            Xb, yb = zip(*batch)
-            yield np.stack(Xb), np.stack(yb)
-
-    return modgenerator
-
-
-def infinitegenerator(generatorfunction):
-    """Decorator that makes a generator replay indefinitely
-    
-    An "infinite" parameter is added to the generator, that if set to True
-    makes the generator loop indifenitely.    
-    """
-
-    def infgenerator(*args, **kwargs):
-        if "infinite" in kwargs:
-            infinite = kwargs["infinite"]
-            del kwargs["infinite"]
-        else:
-            infinite = False
-        if infinite == True:
-            while True:
-                for elem in generatorfunction(*args, **kwargs):
-                    yield elem
-        else:
-            for elem in generatorfunction(*args, **kwargs):
-                yield elem
-
-    return infgenerator
+from .utils import sample
 
 
 class BaseNetwork(BaseEstimator):
-    def __init__(self, tokenizer=Tokenizer(), max_sequence_len=301, batchsize=32):
+    """Class to built, train and generate new text with neural networks"""
+
+    ###############################################################################
+    ##################################Main methods#################################
+    ###############################################################################
+
+    def __init__(
+        self, tokenizer=None, max_sequence_len=301, vocab_size=None, batchsize=32
+    ):
         """ AÑADIR MAS INFO
         usamos el max_sequence_len porque así si la longitud máxima de una frase es descabellada
         nos cubrimos las espaldas"""
-        self.tokenizer = tokenizer
+
+        # Añadir arriba que será ignorado si se pasa objeto tokenizer propio
+        self.vocab_size = vocab_size
+        self.tokenizer = Tokenizer(oov_token=None) if tokenizer is None else tokenizer
         self.max_sequence_len = max_sequence_len
         self.batchsize = batchsize
 
-    def etl(self, data):
+    def etl(self, data, mask=[True, True, True, False]):
 
-        # basic cleanup
+        # Basic cleanup
         corpus = data.lower().split("\n")
 
-        # tokenization
+        # Tokenization
         self.tokenizer.fit_on_texts(corpus)
-        self.total_words = len(self.tokenizer.word_index) + 1
+        if self.vocab_size is not None and self.vocab_size < len(
+            self.tokenizer.word_index
+        ):
+            sorted_dict = [
+                (key, self.tokenizer.word_index[key])
+                for key in sorted(
+                    self.tokenizer.word_counts,
+                    key=self.tokenizer.word_counts.get,
+                    reverse=True,
+                )
+            ][: self.vocab_size - 1]
+
+            self.tokenizer.word_index = dict(sorted_dict)
+            self.tokenizer.index_word = dict(
+                zip(
+                    list(self.tokenizer.word_index.values()),
+                    list(self.tokenizer.word_index.keys()),
+                )
+            )
+            assert (
+                self.vocab_size - 1
+                == len(self.tokenizer.word_index)
+                == len(self.tokenizer.index_word)
+            )
+        else:
+            self.vocab_size = len(self.tokenizer.word_index) + 1
 
         # Total samples
+
+        # Prepare masks
+        if mask is not None:
+            self.testmask = [not x for x in mask]
+            self.mask = mask
+        else:
+            self.mask, self.testmask = [True], [True]
+
         self.num_train_samples = len(
-            list(self.patterngenerator(corpus, batchsize=self.batchsize, count=True))
+            list(
+                self.patterngenerator(
+                    corpus, batchsize=self.batchsize, count=True, mask=self.mask
+                )
+            )
+        )
+        self.num_test_samples = len(
+            list(
+                self.patterngenerator(
+                    corpus, batchsize=self.batchsize, count=True, mask=self.testmask
+                )
+            )
         )
 
         print(f"There are a total of {self.num_train_samples} training samples")
-        # print(f"There are a total of {self.num_train_samples} validation samples")
+        print(f"There are a total of {self.num_test_samples} validation samples")
 
         return corpus
-
-    def patterngenerator(self, corpus, **kwargs):
-        """Infinite generator of encoded patterns.
-        
-        Arguments
-            - corpus: iterable of strings making up the corpus
-            - **kwargs: any other arguments are passed on to decodetext
-        """
-        # Pre-tokenized all corpus documents, for efficiency
-        tokenizedcorpus = self.tokenizer.texts_to_sequences(corpus)
-        self.max_sequence_len = min(
-            len(max(tokenizedcorpus, key=len)), self.max_sequence_len
-        )
-        for pattern in self._tokenizedpatterngenerator(tokenizedcorpus, **kwargs):
-            yield pattern
-
-    @infinitegenerator
-    @batchedpatternsgenerator
-    def _tokenizedpatterngenerator(self, tokenizedcorpus, **kwargs):
-        for token_list in tokenizedcorpus:
-            for i in range(1, len(token_list)):
-                sample = np.array(
-                    pad_sequences(
-                        [token_list[: i + 1]],
-                        maxlen=self.max_sequence_len,
-                        padding="pre",
-                        value=0,
-                    )
-                )
-                X, y = sample[:, :-1], sample[:, -1]
-                y = ku.to_categorical(y, num_classes=self.total_words)
-                if "count" in kwargs and kwargs["count"] is True:
-                    yield 0, 0
-                else:
-                    yield X[0], y[0]
-
-    def generate_text(self, seed_text, next_words):
-
-        for _ in range(next_words):
-            token_list = self.tokenizer.texts_to_sequences([seed_text])[0]
-            token_list = pad_sequences(
-                [token_list], maxlen=self.max_sequence_len - 1, padding="pre"
-            )
-            predicted = self.net.predict(token_list, verbose=0)[0]
-            sampled_predicted = sample(np.log(predicted), 0.5)
-            seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
 
     def compile(
         self,
@@ -188,7 +132,7 @@ class BaseNetwork(BaseEstimator):
 
         self.net.add(
             Embedding(
-                input_dim=self.total_words,
+                input_dim=self.vocab_size,
                 output_dim=output_dim,
                 input_length=self.max_sequence_len - 1,
                 trainable=trainable,
@@ -203,7 +147,7 @@ class BaseNetwork(BaseEstimator):
         else:
             raise Exception("Unknown network architecture")
 
-        self.net.add(Dense(self.total_words, activation=activation))
+        self.net.add(Dense(self.vocab_size, activation=activation))
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
 
         print(self.summary())
@@ -232,16 +176,16 @@ class BaseNetwork(BaseEstimator):
         epochs : int, optional
             Number of train epochs. 
         max_queue_size : int, optional
-            TODO
+            Like in keras
         save : str or bool
             Whether to save or not the model in a file. If False it will not be saved.
             If strm it will be saved in path=str.
         shuffle : bool, optional
             Wether so shufle or not train samples during the training process.
         use_multiprocessing : bool, optional
-            TODO
+            Like in keras
         verbose : int, optional
-            TODO
+            Like in keras
 
         Returns
         -----
@@ -256,20 +200,46 @@ class BaseNetwork(BaseEstimator):
                     monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
                 )
             ]
+
         print("The fit process is starting!")
         self.net.fit_generator(
-            self.patterngenerator(corpus, batchsize=self.batchsize, infinite=True),
+            self.patterngenerator(
+                corpus, batchsize=self.batchsize, infinite=True, mask=self.mask
+            ),
             steps_per_epoch=self.num_train_samples,
             callbacks=earlystop,
             epochs=epochs,
-            # validation_data=self.patterngenerator(corpus, batchsize=batchsize, infinite=True),
+            validation_data=self.patterngenerator(
+                corpus, batchsize=self.batchsize, infinite=True, mask=self.testmask
+            ),
+            validation_steps=self.num_test_samples,
             verbose=verbose,
             max_queue_size=max_queue_size,
             use_multiprocessing=use_multiprocessing,
             shuffle=shuffle,
         )
+
         if save != False:
             self.save(save)
+
+    def generate_text(self, seed_text, next_words):
+
+        for i in range(next_words):
+            token_list = self.tokenizer.texts_to_sequences([seed_text])[0]
+            token_list = pad_sequences(
+                [token_list], maxlen=self.max_sequence_len - 1, padding="pre"
+            )
+            predicted = self.net.predict(token_list, verbose=0)[0]
+            sampled_predicted = sample(np.log(predicted), 0.5)
+            print(f"why?{i}")
+            print(sampled_predicted)
+            seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+
+        return seed_text
+
+    ###############################################################################
+    ##################################Aux methods##################################
+    ###############################################################################
 
     def Baseline(self):
         """Simple network with an embedding layer and a dense one"""
@@ -327,8 +297,13 @@ class BaseNetwork(BaseEstimator):
         """Wrapper method for keras' sequential model save"""
         return self.net.save(path)
 
+    ###############################################################################
+    ###########################Embedding related methods###########################
+    ###############################################################################
+
     def load_vectors_words(self, fname):
-        """Loads embeddings from a FastText file. Only loads embeddings for the given dictionary of words
+        """Loads embeddings from a FastText file. Only loads embeddings for the given
+        dictionary of words
 
         Parameters
         ----------
@@ -353,23 +328,64 @@ class BaseNetwork(BaseEstimator):
         return data
 
     def create_embedding_matrix(self, embeddings):
-        """Creates a weight matrix for an Embedding layer using an embeddings dictionary and a Tokenizer"""
+        """Creates a weight matrix for an Embedding layer using an embeddings dictionary
+        and a Tokenizer"""
 
         # Compute mean and standard deviation for embeddings
         all_embs = np.stack(embeddings.values())
         emb_mean, emb_std = all_embs.mean(), all_embs.std()
         embedding_size = len(next(iter(embeddings.values())))
         embedding_matrix = np.random.normal(
-            emb_mean, emb_std, (self.total_words, embedding_size)
+            emb_mean, emb_std, (self.vocab_size, embedding_size)
         )
         for word, i in self.tokenizer.word_index.items():
-            if i >= self.total_words:
+            if i >= self.vocab_size:
                 break
             embedding_vector = embeddings.get(word)
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
 
         return embedding_matrix
+
+    ###############################################################################
+    #########################fit_generator related methods#########################
+    ###############################################################################
+
+    def patterngenerator(self, corpus, **kwargs):
+        """Infinite generator of encoded patterns.
+        
+        Arguments
+            - corpus: iterable of strings making up the corpus
+            - **kwargs: any other arguments are passed on to decodetext
+        """
+        # Pre-tokenized all corpus documents, for efficiency
+        tokenizedcorpus = self.tokenizer.texts_to_sequences(corpus)
+        self.max_sequence_len = min(
+            len(max(tokenizedcorpus, key=len)), self.max_sequence_len
+        )
+        for pattern in self._tokenizedpatterngenerator(tokenizedcorpus, **kwargs):
+            yield pattern
+
+    @infinitegenerator
+    @batchedpatternsgenerator
+    @maskedgenerator
+    def _tokenizedpatterngenerator(self, tokenizedcorpus, **kwargs):
+        for token_list in tokenizedcorpus:
+            for i in range(1, len(token_list)):
+                sample = np.array(
+                    pad_sequences(
+                        [token_list[: i + 1]],
+                        maxlen=self.max_sequence_len,
+                        padding="pre",
+                        value=0,
+                    )
+                )
+                X, y = sample[:, :-1], sample[:, -1]
+                y = ku.to_categorical(y, num_classes=self.vocab_size)
+                if "count" in kwargs and kwargs["count"] is True:
+                    yield 0, 0
+                else:
+                    yield X[0], y[0]
 
 
 def load_model(path):
@@ -383,25 +399,3 @@ def load_model(path):
 
     #     model = cls()
     #     return load_model(path)
-
-def sample(logprobs, temperature=1.0):
-    """Modifies probabilities with a given temperature, to add creativity
-    Devuelve el indice"""
-    probs = np.exp(logprobs / temperature)
-    normprobs = normalize(probs)
-    return np.argmax(np.random.multinomial(1, normprobs, 1))
-
-
-def normalize(probs):
-    """Normalizes a list of probabilities, so that they sum up to 1"""
-    prob_factor = 1 / sum(probs)
-    return [prob_factor * p for p in probs]
-
-
-def splitevery(iterable, n):
-    """Returns blocks of elements from an iterator"""
-    i = iter(iterable)
-    piece = list(islice(i, n))
-    while piece:
-        yield piece
-        piece = list(islice(i, n))
