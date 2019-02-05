@@ -1,3 +1,6 @@
+# @author Álvaro Barbero Jiménez
+# Modifications by: Guillem G. Subies
+
 from itertools import islice
 
 import numpy as np

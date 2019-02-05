@@ -1,3 +1,5 @@
+# @author Guillem G. Subies
+
 import keras.utils as ku
 import numpy as np
 from keras.callbacks import EarlyStopping
@@ -23,17 +25,45 @@ class BaseNetwork(BaseEstimator):
     def __init__(
         self, tokenizer=None, max_sequence_len=301, vocab_size=None, batchsize=32
     ):
-        """ AÑADIR MAS INFO
-        usamos el max_sequence_len porque así si la longitud máxima de una frase es descabellada
-        nos cubrimos las espaldas"""
+        """
+        Parameters
+        ----------
+        tokenizer : object, optional
+            If None, a default tokanizer will be used. 
+        max_sequence_len : int, optional
+            Maximum lenght, in words, of each sample. It will be the minimum between
+            the introduced number and the maximum lenght of the saples befor being processed
+        vocab_size : int, optional
+            If None, it will be the same as the full vocabulary. Else, the maximum
+            size of the vocabulary will be vocab_size.
+        batchsize: int, optional
+            Size of batches to pass to the fit_generator
 
-        # Añadir arriba que será ignorado si se pasa objeto tokenizer propio
+        """
+
         self.vocab_size = vocab_size
         self.tokenizer = Tokenizer(oov_token=None) if tokenizer is None else tokenizer
         self.max_sequence_len = max_sequence_len
         self.batchsize = batchsize
 
     def etl(self, data, mask=[True, True, True, False]):
+        """Method that preprocesses input and creates some necesary variables to be used
+        in the fit_generator
+        
+        Parameters
+        ----------
+        data : iterable of strings
+            Dataset we want to use
+        mask : list of bool, optional
+            Mask to be used in the train test split. For instance the default value means
+            that every fourth sample generated will be used in the validation step. If mask
+            is None, no train test split will be done.
+
+        Returns
+        -------
+        corpus : iterable of strings
+            Preprocessed dataset to be used in the fit phase.
+        """
 
         # Basic cleanup
         corpus = data.lower().split("\n")
@@ -67,8 +97,6 @@ class BaseNetwork(BaseEstimator):
         else:
             self.vocab_size = len(self.tokenizer.word_index) + 1
 
-        # Total samples
-
         # Prepare masks
         if mask is not None:
             self.testmask = [not x for x in mask]
@@ -76,6 +104,7 @@ class BaseNetwork(BaseEstimator):
         else:
             self.mask, self.testmask = [True], [True]
 
+        # Total samples
         self.num_train_samples = len(
             list(
                 self.patterngenerator(
@@ -108,6 +137,26 @@ class BaseNetwork(BaseEstimator):
         optimizer="adam",
         lstm=[32],
     ):
+        """Builds the architecture of a neural network
+
+        Parameters
+        ----------
+        activation : str, optional
+            Activation function used in the las layer of the network.
+        arch : str, optional
+            If "Baseline": The architecture will be embedding layer + dense.
+            If "LSTM_Embedding": The architectura will be embedding layer + bidirectional
+                LSTM + hidden LSTMs + dense. The hidden LSTMs will be defined by the param
+                "lstm".
+        embedding : str, optional
+            If None, a simple embedding layer will be used. If "fastText", fastText
+            embeddings will be used.
+        embedding_output_dim : int, optional
+            Outpud dimension of the embedding layer. It is ignored if the used embedding
+            is "fastText" (it has a fixed size of 300)
+        gpu : bool, optional
+            If True, CuDNNLSTM networks will be used in stead of LSTM.
+        """
 
         self.net = Sequential()
 
@@ -141,7 +190,7 @@ class BaseNetwork(BaseEstimator):
         )
 
         if arch == "Baseline":
-            self.Baseline()
+            self.net.add(Flatten())
         elif arch == "LSTM_Embedding":
             self.LSTM_Embedding(gpu=gpu, lstm_arch=lstm)
         else:
@@ -241,13 +290,6 @@ class BaseNetwork(BaseEstimator):
     ##################################Aux methods##################################
     ###############################################################################
 
-    def Baseline(self):
-        """Simple network with an embedding layer and a dense one"""
-
-        self.net.add(Flatten())
-
-        return self
-
     def LSTM_Embedding(self, gpu, lstm_arch):
         """This Network consists in a embedding layer followed by a bidirectional
         LSTM and some number of hidden LSTM. There is a dense layer at the end.
@@ -329,7 +371,16 @@ class BaseNetwork(BaseEstimator):
 
     def create_embedding_matrix(self, embeddings):
         """Creates a weight matrix for an Embedding layer using an embeddings dictionary
-        and a Tokenizer"""
+
+        Parameters
+        ----------
+        embeddings : dict
+            preloaded embedding dict to use
+
+        Returns
+        -------
+        embedding_matrix : numpy.ndarray
+            Matrix with"""
 
         # Compute mean and standard deviation for embeddings
         all_embs = np.stack(embeddings.values())
@@ -354,10 +405,13 @@ class BaseNetwork(BaseEstimator):
     def patterngenerator(self, corpus, **kwargs):
         """Infinite generator of encoded patterns.
         
-        Arguments
-            - corpus: iterable of strings making up the corpus
-            - **kwargs: any other arguments are passed on to decodetext
+        Parameters
+        -----------
+            corpus : iterable of strings
+                The corpus
+            **kwargs : any other arguments are passed on to decodetext
         """
+
         # Pre-tokenized all corpus documents, for efficiency
         tokenizedcorpus = self.tokenizer.texts_to_sequences(corpus)
         self.max_sequence_len = min(
