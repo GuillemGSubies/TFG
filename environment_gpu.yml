@@ -1,0 +1,14 @@
+name: tfg_guillem_gpu
+channels:
+- defaults
+- conda-forge
+dependencies:
+- jupyterlab=0.35.4
+- cudnn=7.3.1
+- keras-gpu=2.4.4
+- matplotlib=3.0.2
+- nb_conda=2.2.1
+- numpy=1.16.0
+- pandas=0.24.0
+- python=3.7
+- scikit-learn=0.20.2
