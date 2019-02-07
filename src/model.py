@@ -12,6 +12,7 @@ from sklearn.base import BaseEstimator
 
 from .generators import batchedpatternsgenerator, infinitegenerator, maskedgenerator
 from .metrics import perplexity_raw
+from .plotting import plot_history as _plot_history
 from .utils import sample
 
 
@@ -211,6 +212,7 @@ class BaseNetwork(BaseEstimator):
         shuffle=False,
         use_multiprocessing=True,
         verbose=1,
+        plot=True,
     ):
 
         """Fits the model with given data. It uses generators to create train an test samples
@@ -232,14 +234,15 @@ class BaseNetwork(BaseEstimator):
         shuffle : bool, optional
             Wether so shufle or not train samples during the training process.
         use_multiprocessing : bool, optional
-            Like in keras
+            Like in keras.
         verbose : int, optional
-            Like in keras
-
+            Like in keras.
+        plot : bool, optional
+            Wether to plot the training history at the end of the training or not.
         Returns
         -----
         data : dict
-            Embedding dict
+            Embedding dict.
 
         """
 
@@ -268,8 +271,11 @@ class BaseNetwork(BaseEstimator):
             shuffle=shuffle,
         )
 
-        if save != False:
+        if save:
             self.save(save)
+
+        if plot:
+            self.plot_history() 
 
     def generate_text(self, seed_text, next_words):
 
@@ -335,9 +341,19 @@ class BaseNetwork(BaseEstimator):
         """Wrapper method for keras' sequential model summary"""
         return self.net.summary()
 
+    @property
+    def history(self):
+        """keras' sequential model history"""
+        return self.net.history
+
+    def plot_history(self):
+        """Wrapper method for plotting the model history"""
+        _plot_history(self.history)
+
     def save(self, path):
         """Wrapper method for keras' sequential model save"""
         return self.net.save(path)
+
 
     ###############################################################################
     ###########################Embedding related methods###########################
