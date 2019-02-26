@@ -1,5 +1,8 @@
 # @author Guillem G. Subies
 
+import json
+
+import jsonpickle
 import keras.utils as ku
 import numpy as np
 from keras.callbacks import EarlyStopping
@@ -137,6 +140,7 @@ class BaseNetwork(BaseEstimator):
         metrics=[perplexity_raw],
         optimizer="adam",
         lstm=[32],
+        **kwargs,
     ):
         """Builds the architecture of a neural network
 
@@ -198,21 +202,19 @@ class BaseNetwork(BaseEstimator):
             raise Exception("Unknown network architecture")
 
         self.net.add(Dense(self.vocab_size, activation=activation))
-        self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics)
+        self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics, **kwargs)
 
         print(self.summary())
 
     def fit(
         self,
         corpus,
+        callbacks=None,
         earlystop=None,
         epochs=200,
-        max_queue_size=1000,  # qué debería poner?
-        save=False,
-        shuffle=False,
-        use_multiprocessing=True,
         verbose=1,
         plot=True,
+        **kwargs,
     ):
 
         """Fits the model with given data. It uses generators to create train an test samples
@@ -221,20 +223,14 @@ class BaseNetwork(BaseEstimator):
         ----------
         corpus : list of str
             Dataset to train the model.
-        earlystop : bool or callable, optional
-            If False no callbacks will be used. If True, a simple EarlyStopping will be used.
-            A custom callback method can also be passed to the fit method.
+        callbacks : object, optional
+        earlystop : bool, optional
+            If False no default earlystop will be used. If True, a simple EarlyStopping will be used.
         epochs : int, optional
             Number of train epochs. 
-        max_queue_size : int, optional
-            Like in keras
         save : str or bool
             Whether to save or not the model in a file. If False it will not be saved.
             If strm it will be saved in path=str.
-        shuffle : bool, optional
-            Wether so shufle or not train samples during the training process.
-        use_multiprocessing : bool, optional
-            Like in keras.
         verbose : int, optional
             Like in keras.
         plot : bool, optional
@@ -246,12 +242,19 @@ class BaseNetwork(BaseEstimator):
 
         """
 
-        if earlystop is True:
-            earlystop = [
-                EarlyStopping(
-                    monitor="val_loss", min_delta=0, patience=5, verbose=0, mode="auto"
-                )
-            ]
+        callbacks = callbacks or []
+        if earlystop:
+            callbacks.append(
+                [
+                    EarlyStopping(
+                        monitor="val_loss",
+                        min_delta=0,
+                        patience=5,
+                        verbose=0,
+                        mode="auto",
+                    )
+                ]
+            )
 
         print("The fit process is starting!")
         self.net.fit_generator(
@@ -259,23 +262,18 @@ class BaseNetwork(BaseEstimator):
                 corpus, batchsize=self.batchsize, infinite=True, mask=self.mask
             ),
             steps_per_epoch=self.num_train_samples,
-            callbacks=earlystop,
+            callbacks=callbacks,
             epochs=epochs,
             validation_data=self.patterngenerator(
                 corpus, batchsize=self.batchsize, infinite=True, mask=self.testmask
             ),
             validation_steps=self.num_test_samples,
             verbose=verbose,
-            max_queue_size=max_queue_size,
-            use_multiprocessing=use_multiprocessing,
-            shuffle=shuffle,
+            **kwargs,
         )
 
-        if save:
-            self.save(save)
-
         if plot:
-            self.plot_history() 
+            self.plot_history()
 
     def generate_text(self, seed_text, next_words):
 
@@ -286,9 +284,11 @@ class BaseNetwork(BaseEstimator):
             )
             predicted = self.net.predict(token_list, verbose=0)[0]
             sampled_predicted = sample(np.log(predicted), 0.5)
-            print(f"why?{i}")
-            print(sampled_predicted)
-            seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+            try:
+                seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+            except:
+                # Predicted 0, pass this time
+                pass
 
         return seed_text
 
@@ -350,10 +350,20 @@ class BaseNetwork(BaseEstimator):
         """Wrapper method for plotting the model history"""
         _plot_history(self.history)
 
-    def save(self, path):
-        """Wrapper method for keras' sequential model save"""
-        return self.net.save(path)
+    def save(self, path=None):
+        """Saves the model in json format"""
+        if path is None:
+            path = f"{self}.json"
+        json_object = jsonpickle.encode(self)
+        with open(path, "w") as outfile:
+            json.dump(json_object, outfile)
+        return json_object
 
+    @classmethod
+    def load_model(path):
+        """Loads a model"""
+        with open(path) as infile:
+            return jsonpickle.decode(json.load(infile))
 
     ###############################################################################
     ###########################Embedding related methods###########################
@@ -456,16 +466,3 @@ class BaseNetwork(BaseEstimator):
                     yield 0, 0
                 else:
                     yield X[0], y[0]
-
-
-def load_model(path):
-    """PROVISIONAL Wrapper method for keras' sequential model load_model"""
-    return load_model(path)
-
-    # @classmethod
-    # def load_model(cls, path):
-    # TODO: Esto es más complicado de lo que parece ya que habría que guardar también el tokenizador en algún sitio también
-    #     """Wrapper method for keras' load_model"""
-
-    #     model = cls()
-    #     return load_model(path)

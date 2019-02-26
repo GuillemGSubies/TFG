@@ -11,3 +11,5 @@ dependencies:
 - pandas=0.24.0
 - python=3.7
 - scikit-learn=0.20.2
+- pip:
+  - jsonpickle==1.1
