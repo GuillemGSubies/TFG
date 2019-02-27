@@ -1,11 +1,13 @@
 # @author Guillem G. Subies
 
+
+import datetime
 import json
 
 import jsonpickle
 import keras.utils as ku
 import numpy as np
-from keras.callbacks import EarlyStopping
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.layers import LSTM, Bidirectional, CuDNNLSTM, Dense, Flatten
 from keras.layers.embeddings import Embedding
 from keras.models import Sequential, load_model
@@ -13,6 +15,7 @@ from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.base import BaseEstimator
 
+from .callbacks import ModelFullCheckpoint
 from .generators import batchedpatternsgenerator, infinitegenerator, maskedgenerator
 from .metrics import perplexity_raw
 from .plotting import plot_history as _plot_history
@@ -27,13 +30,18 @@ class BaseNetwork(BaseEstimator):
     ###############################################################################
 
     def __init__(
-        self, tokenizer=None, max_sequence_len=301, vocab_size=None, batchsize=32
+        self,
+        tokenizer=None,
+        max_sequence_len=301,
+        vocab_size=None,
+        batchsize=32,
+        **kwargs,
     ):
         """
         Parameters
         ----------
         tokenizer : object, optional
-            If None, a default tokanizer will be used. 
+            If None, a default tokanizer will be used.
         max_sequence_len : int, optional
             Maximum lenght, in words, of each sample. It will be the minimum between
             the introduced number and the maximum lenght of the saples befor being processed
@@ -49,11 +57,13 @@ class BaseNetwork(BaseEstimator):
         self.tokenizer = Tokenizer(oov_token=None) if tokenizer is None else tokenizer
         self.max_sequence_len = max_sequence_len
         self.batchsize = batchsize
+        # Other kwargs, this is used in the load_model method
+        self.__dict__.update(kwargs)
 
-    def etl(self, data, mask=[True, True, True, False]):
+    def etl(self, data, mask=None):
         """Method that preprocesses input and creates some necesary variables to be used
-        in the fit_generator
-        
+        in the fit_generator.
+
         Parameters
         ----------
         data : iterable of strings
@@ -69,6 +79,7 @@ class BaseNetwork(BaseEstimator):
             Preprocessed dataset to be used in the fit phase.
         """
 
+        mask = mask or [True, True, True, False]
         # Basic cleanup
         corpus = data.lower().split("\n")
 
@@ -137,9 +148,9 @@ class BaseNetwork(BaseEstimator):
         embedding_output_dim=64,
         gpu=False,
         loss="categorical_crossentropy",
-        metrics=[perplexity_raw],
+        metrics=None,
         optimizer="adam",
-        lstm=[32],
+        lstm=None,
         **kwargs,
     ):
         """Builds the architecture of a neural network
@@ -155,7 +166,8 @@ class BaseNetwork(BaseEstimator):
                 "lstm".
         embedding : str, optional
             If None, a simple embedding layer will be used. If "fastText", fastText
-            embeddings will be used.
+            embeddings will be used. fastText embeddings must be downloaded and uncompressed
+            in the project root
         embedding_output_dim : int, optional
             Outpud dimension of the embedding layer. It is ignored if the used embedding
             is "fastText" (it has a fixed size of 300)
@@ -163,6 +175,8 @@ class BaseNetwork(BaseEstimator):
             If True, CuDNNLSTM networks will be used in stead of LSTM.
         """
 
+        lstm = lstm or [32]
+        perplexity_raw = perplexity_raw or [perplexity_raw]
         self.net = Sequential()
 
         # Embedding layer
@@ -194,6 +208,7 @@ class BaseNetwork(BaseEstimator):
             )
         )
 
+        # Core layers
         if arch == "Baseline":
             self.net.add(Flatten())
         elif arch == "LSTM_Embedding":
@@ -201,6 +216,7 @@ class BaseNetwork(BaseEstimator):
         else:
             raise Exception("Unknown network architecture")
 
+        # Final layer
         self.net.add(Dense(self.vocab_size, activation=activation))
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics, **kwargs)
 
@@ -210,7 +226,9 @@ class BaseNetwork(BaseEstimator):
         self,
         corpus,
         callbacks=None,
-        earlystop=None,
+        checkpoints=True,
+        dynamic_lr=True,
+        earlystop=True,
         epochs=200,
         verbose=1,
         plot=True,
@@ -224,10 +242,14 @@ class BaseNetwork(BaseEstimator):
         corpus : list of str
             Dataset to train the model.
         callbacks : object, optional
+        checkpoints : bool, optional
+            If True, ModelFullCheckpoint will be added to callbacks
+        dynamic_lr : bool, optional
+            If True, ModelFullCheckpoint will be added to callbacks
         earlystop : bool, optional
             If False no default earlystop will be used. If True, a simple EarlyStopping will be used.
         epochs : int, optional
-            Number of train epochs. 
+            Number of train epochs.
         save : str or bool
             Whether to save or not the model in a file. If False it will not be saved.
             If strm it will be saved in path=str.
@@ -243,19 +265,30 @@ class BaseNetwork(BaseEstimator):
         """
 
         callbacks = callbacks or []
+        if dynamic_lr:
+            callbacks.append(
+                ReduceLROnPlateau(
+                    monitor="val_loss", factor=0.8, patience=5, verbose=1, mode="min"
+                )
+            )
         if earlystop:
             callbacks.append(
-                [
-                    EarlyStopping(
-                        monitor="val_loss",
-                        min_delta=0,
-                        patience=5,
-                        verbose=0,
-                        mode="auto",
-                    )
-                ]
+                EarlyStopping(
+                    monitor="val_loss", min_delta=0, patience=10, verbose=1, mode="min"
+                )
             )
-
+        if checkpoints:
+            model_name = f"Best_model_{datetime.datetime.now().time()}"
+            print(f"The model will be saved with the name: {model_name}")
+            callbacks.append(
+                ModelFullCheckpoint(
+                    modelo=self,
+                    filepath=model_name,
+                    save_best_only=True,
+                    monitor="val_loss",
+                    mode="min",
+                )
+            )
         print("The fit process is starting!")
         self.net.fit_generator(
             self.patterngenerator(
@@ -271,26 +304,47 @@ class BaseNetwork(BaseEstimator):
             verbose=verbose,
             **kwargs,
         )
-
         if plot:
             self.plot_history()
 
     def generate_text(self, seed_text, next_words):
+        """Generates text following the given seed
 
+        Parameters
+        ----------
+        seed_text : str
+            String to start generating text from (what you pass to the predict method).
+        next_words : int
+            Number of words to generate
+
+        Returns
+        -------
+        generated_text : str
+            String containing the generated text
+        """
+
+        generated_text = seed_text
         for i in range(next_words):
-            token_list = self.tokenizer.texts_to_sequences([seed_text])[0]
+            token_list = self.tokenizer.texts_to_sequences([generated_text])[0]
             token_list = pad_sequences(
                 [token_list], maxlen=self.max_sequence_len - 1, padding="pre"
             )
             predicted = self.net.predict(token_list, verbose=0)[0]
             sampled_predicted = sample(np.log(predicted), 0.5)
+            print(sampled_predicted)
             try:
-                seed_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+                generated_text += f" {self.tokenizer.index_word[sampled_predicted]}"
             except:
-                # Predicted 0, pass this time
-                pass
+                # We using a loaded model and the values of the dict are strings
+                try:
+                    generated_text += (
+                        f" {self.tokenizer.index_word[str(sampled_predicted)]}"
+                    )
+                except:
+                    # Predicted 0, pass this time
+                    pass
 
-        return seed_text
+        return generated_text
 
     ###############################################################################
     ##################################Aux methods##################################
@@ -309,10 +363,6 @@ class BaseNetwork(BaseEstimator):
             len(lstm_arch) will be the number of LSTM layers in the model (being the
             first one, bidirectional) and every elem in lstm_arch is the number of
             neurons for the ith layer.
-
-        Returns
-        -----
-        self
         """
 
         lstm = CuDNNLSTM if gpu else LSTM
@@ -351,19 +401,33 @@ class BaseNetwork(BaseEstimator):
         _plot_history(self.history)
 
     def save(self, path=None):
-        """Saves the model in json format"""
+        """Saves the model in json format. The keras network will be
+        saved into a file called path_network.h5 and the rest of
+        the params into path_attrs.json"""
         if path is None:
-            path = f"{self}.json"
-        json_object = jsonpickle.encode(self)
-        with open(path, "w") as outfile:
-            json.dump(json_object, outfile)
-        return json_object
+            path = f"{self}"
+        kwargs = dict()
+        for key in self.__dict__:
+            if key != "net":
+                kwargs[key] = self.__dict__[key]
+        try:
+            self.net.save(f"{path}_network.h5")
+            with open(f"{path}_attrs.json", "w") as outfile:
+                json.dump(jsonpickle.encode(kwargs), outfile)
+            return "Model saved successfully!"
+        except:
+            return "Something went wrong when saving the model..."
 
     @classmethod
-    def load_model(path):
-        """Loads a model"""
-        with open(path) as infile:
-            return jsonpickle.decode(json.load(infile))
+    def load_model(cls, path):
+        """Loads a model from the files. The keras network should be in a file called
+        path_network.h5 and the rest of the params in path_attrs.json"""
+        with open(f"{path}_attrs.json") as infile:
+            kwargs = jsonpickle.decode(json.load(infile))
+        kwargs["net"] = load_model(
+            f"{path}_network.h5", custom_objects={"perplexity_raw": perplexity_raw}
+        )
+        return cls(**kwargs)
 
     ###############################################################################
     ###########################Embedding related methods###########################
@@ -426,11 +490,13 @@ class BaseNetwork(BaseEstimator):
 
     ###############################################################################
     #########################fit_generator related methods#########################
+    ####################Inspired by Alvaro Barbero's neurowriter###################
+    ###https://github.com/albarji/neurowriter/blob/master/neurowriter/encoding.py##
     ###############################################################################
 
     def patterngenerator(self, corpus, **kwargs):
         """Infinite generator of encoded patterns.
-        
+
         Parameters
         -----------
             corpus : iterable of strings
@@ -452,7 +518,7 @@ class BaseNetwork(BaseEstimator):
     def _tokenizedpatterngenerator(self, tokenizedcorpus, **kwargs):
         for token_list in tokenizedcorpus:
             for i in range(1, len(token_list)):
-                sample = np.array(
+                sampl = np.array(
                     pad_sequences(
                         [token_list[: i + 1]],
                         maxlen=self.max_sequence_len,
@@ -460,7 +526,7 @@ class BaseNetwork(BaseEstimator):
                         value=0,
                     )
                 )
-                X, y = sample[:, :-1], sample[:, -1]
+                X, y = sampl[:, :-1], sampl[:, -1]
                 y = ku.to_categorical(y, num_classes=self.vocab_size)
                 if "count" in kwargs and kwargs["count"] is True:
                     yield 0, 0

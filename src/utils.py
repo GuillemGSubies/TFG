@@ -1,9 +1,11 @@
+# @author Guillem G. Subies
+
 import numpy as np
 
 
 def sample(logprobs, temperature=1.0):
     """Modifies probabilities with a given temperature, to add creativity
-    
+
     Parameters
     ----------
     logprobs : list of float

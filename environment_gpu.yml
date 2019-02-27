@@ -5,10 +5,12 @@ channels:
 dependencies:
 - jupyterlab=0.35.4
 - cudnn=7.3.1
-- keras-gpu=2.4.4
+- keras-gpu=2.2.4
 - matplotlib=3.0.2
 - nb_conda=2.2.1
 - numpy=1.16.0
 - pandas=0.24.0
-- python=3.7
+- python=3.6
 - scikit-learn=0.20.2
+- pip:
+  - jsonpickle==1.1

@@ -1,3 +1,5 @@
+# @author Guillem G. Subies
+
 from keras import backend as K
 
 

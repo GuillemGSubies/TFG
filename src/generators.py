@@ -1,4 +1,4 @@
-# @author Álvaro Barbero Jiménez
+# @author Álvaro Barbero Jiménez https://github.com/albarji/neurowriter/blob/master/neurowriter/genutils.py
 # Modifications by: Guillem G. Subies
 
 from itertools import islice
@@ -10,7 +10,7 @@ def batchedgenerator(generatorfunction):
     """Decorator that makes a pattern generator produce patterns in batches
     A "batchsize" parameter is added to the generator, that if specified
     groups the data in batches of such size.
-    
+
     It is expected that the generator returns instances of data patterns,
     as tuples of numpy arrays (X,y)
     """
@@ -29,13 +29,13 @@ def batchedgenerator(generatorfunction):
 
 def batchedpatternsgenerator(generatorfunction):
     """Decorator that assumes patterns (X,y) and stacks them in batches
-    
+
     This can be thought of a specialized version of the batchedgenerator
     that assumes the base generator returns instances of data patterns,
     as tuples of numpy arrays (X,y). When grouping them in batches the
-    numpy arrays are stacked so that each returned batch has a pattern 
+    numpy arrays are stacked so that each returned batch has a pattern
     per row.
-    
+
     A "batchsize" parameter is added to the generator, that if specified
     groups the data in batches of such size.
     """
@@ -50,7 +50,7 @@ def batchedpatternsgenerator(generatorfunction):
 
 def maskedgenerator(generatorfunction):
     """Decorator that adds outputs masking to a generator.
-    
+
     A "mask" parameter is added to the generator function, which expects
     a list of boolean variables. The mask is iterated in parallel to the
     generator, blocking from the output those items with a False value
@@ -74,7 +74,7 @@ def infinitegenerator(generatorfunction):
     """Decorator that makes a generator replay indefinitely
     
     An "infinite" parameter is added to the generator, that if set to True
-    makes the generator loop indifenitely.    
+    makes the generator loop indifenitely.
     """
 
     def infgenerator(*args, **kwargs):
@@ -83,7 +83,7 @@ def infinitegenerator(generatorfunction):
             del kwargs["infinite"]
         else:
             infinite = False
-        if infinite == True:
+        if infinite is True:
             while True:
                 for elem in generatorfunction(*args, **kwargs):
                     yield elem
