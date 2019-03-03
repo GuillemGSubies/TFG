@@ -3,12 +3,22 @@
 
 import datetime
 import json
+import zipfile
+from subprocess import check_call
 
 import jsonpickle
 import keras.utils as ku
 import numpy as np
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from keras.layers import LSTM, Bidirectional, CuDNNLSTM, Dense, Flatten
+from keras.layers import (
+    LSTM,
+    Bidirectional,
+    CuDNNLSTM,
+    Dense,
+    Flatten,
+    GlobalAveragePooling1D,
+    GlobalMaxPooling1D,
+)
 from keras.layers.embeddings import Embedding
 from keras.models import Sequential, load_model
 from keras.preprocessing.sequence import pad_sequences
@@ -33,6 +43,7 @@ class BaseNetwork(BaseEstimator):
         self,
         tokenizer=None,
         max_sequence_len=301,
+        min_word_appearences=None,
         vocab_size=None,
         batchsize=32,
         **kwargs,
@@ -45,6 +56,9 @@ class BaseNetwork(BaseEstimator):
         max_sequence_len : int, optional
             Maximum lenght, in words, of each sample. It will be the minimum between
             the introduced number and the maximum lenght of the saples befor being processed
+        min_word_appearences : int, optional
+            Minimum number of appearences of a word in the text in order to take it into account
+            This must not be used at the same time that vocab_size
         vocab_size : int, optional
             If None, it will be the same as the full vocabulary. Else, the maximum
             size of the vocabulary will be vocab_size.
@@ -54,7 +68,16 @@ class BaseNetwork(BaseEstimator):
         """
 
         self.vocab_size = vocab_size
-        self.tokenizer = Tokenizer(oov_token=None) if tokenizer is None else tokenizer
+        self.min_word_appearences = min_word_appearences
+        if self.vocab_size and self.min_word_appearences:
+            raise AttributeException(
+                "You must specify only vocab_size or min_word_appearences, not both."
+            )
+        self.tokenizer = (
+            Tokenizer(num_words=vocab_size, oov_token=None)
+            if tokenizer is None
+            else tokenizer
+        )
         self.max_sequence_len = max_sequence_len
         self.batchsize = batchsize
         # Other kwargs, this is used in the load_model method
@@ -85,31 +108,16 @@ class BaseNetwork(BaseEstimator):
 
         # Tokenization
         self.tokenizer.fit_on_texts(corpus)
-        if self.vocab_size is not None and self.vocab_size < len(
-            self.tokenizer.word_index
-        ):
-            sorted_dict = [
-                (key, self.tokenizer.word_index[key])
-                for key in sorted(
-                    self.tokenizer.word_counts,
-                    key=self.tokenizer.word_counts.get,
-                    reverse=True,
-                )
-            ][: self.vocab_size - 1]
-
-            self.tokenizer.word_index = dict(sorted_dict)
-            self.tokenizer.index_word = dict(
-                zip(
-                    list(self.tokenizer.word_index.values()),
-                    list(self.tokenizer.word_index.keys()),
-                )
-            )
-            assert (
-                self.vocab_size - 1
-                == len(self.tokenizer.word_index)
-                == len(self.tokenizer.index_word)
-            )
-        else:
+        if self.min_word_appearences:
+            low_count_words = [
+                word
+                for word, count in self.tokenizer.word_counts.items()
+                if count < self.min_word_appearences
+            ]
+            for word in low_count_words:
+                del self.tokenizer.word_index[word]
+                del self.tokenizer.word_docs[word]
+                del self.tokenizer.word_counts[word]
             self.vocab_size = len(self.tokenizer.word_index) + 1
 
         # Prepare masks
@@ -143,7 +151,7 @@ class BaseNetwork(BaseEstimator):
     def compile(
         self,
         activation="softmax",
-        arch="Baseline",
+        arch="MaxPooling",
         embedding=None,
         embedding_output_dim=64,
         gpu=False,
@@ -160,7 +168,9 @@ class BaseNetwork(BaseEstimator):
         activation : str, optional
             Activation function used in the las layer of the network.
         arch : str, optional
-            If "Baseline": The architecture will be embedding layer + dense.
+            If "Baseline": The architecture will be embedding layer + flatten + dense. This is VERY memory hungry
+            If "MaxPooling": The architecture will be embedding layer + GlobalMaxPooling1D + dense. This is VERY memory hungry
+            If "AveragePooling": The architecture will be embedding layer + GlobalAveragePooling1D + dense. This is VERY memory hungry
             If "LSTM_Embedding": The architectura will be embedding layer + bidirectional
                 LSTM + hidden LSTMs + dense. The hidden LSTMs will be defined by the param
                 "lstm".
@@ -176,7 +186,7 @@ class BaseNetwork(BaseEstimator):
         """
 
         lstm = lstm or [32]
-        perplexity_raw = perplexity_raw or [perplexity_raw]
+        metrics = metrics or [perplexity_raw]
         self.net = Sequential()
 
         # Embedding layer
@@ -190,9 +200,17 @@ class BaseNetwork(BaseEstimator):
                 print("Embedding file loaded sucessfully!")
             except:
                 print(
-                    "Are you sure that you downloaded the embeddings? The model will work without fastText"
+                    "No embedding file found, downloading it... (this will take a while)"
                 )
-            else:
+                check_call(
+                    f"curl -L# 'https://dl.fbaipublicfiles.com/fasttext/vectors-english/{fastText_file}.zip'",
+                    shell=True,
+                )
+                with zipfile.ZipFile(f"{fastText_file}.zip", "r") as file:
+                    file.extractall("./")
+                embeddings = self.load_vectors_words(fastText_file)
+                print("Embedding file loaded sucessfully!")
+            finally:
                 embedding_matrix = self.create_embedding_matrix(embeddings)
                 output_dim = embedding_matrix.shape[1]
                 trainable = False
@@ -211,6 +229,10 @@ class BaseNetwork(BaseEstimator):
         # Core layers
         if arch == "Baseline":
             self.net.add(Flatten())
+        elif arch == "MaxPooling":
+            self.net.add(GlobalMaxPooling1D())
+        elif arch == "AveragePooling":
+            self.net.add(GlobalAveragePooling1D())
         elif arch == "LSTM_Embedding":
             self.LSTM_Embedding(gpu=gpu, lstm_arch=lstm)
         else:
@@ -325,24 +347,19 @@ class BaseNetwork(BaseEstimator):
 
         generated_text = seed_text
         for i in range(next_words):
-            token_list = self.tokenizer.texts_to_sequences([generated_text])[0]
+            token_list = self.tokenizer.texts_to_sequences([generated_text])
             token_list = pad_sequences(
-                [token_list], maxlen=self.max_sequence_len - 1, padding="pre"
+                token_list, maxlen=self.max_sequence_len - 1, padding="pre"
             )
             predicted = self.net.predict(token_list, verbose=0)[0]
             sampled_predicted = sample(np.log(predicted), 0.5)
-            print(sampled_predicted)
             try:
-                generated_text += f" {self.tokenizer.index_word[sampled_predicted]}"
+                generated_text += (
+                    f" {self.tokenizer.sequences_to_texts([[sampled_predicted]])[0]}"
+                )
             except:
-                # We using a loaded model and the values of the dict are strings
-                try:
-                    generated_text += (
-                        f" {self.tokenizer.index_word[str(sampled_predicted)]}"
-                    )
-                except:
-                    # Predicted 0, pass this time
-                    pass
+                # Predicted 0, pass this time
+                pass
 
         return generated_text
 
@@ -450,12 +467,13 @@ class BaseNetwork(BaseEstimator):
         """
 
         data = {}
+        vocab = tuple(self.tokenizer.word_index.keys())[: self.vocab_size - 1]
         with open(fname) as fin:
             next(fin)  # Skip first line, just contains embeddings size data
             for line in fin:
                 tokens = line.rstrip().split(" ")
                 word = tokens[0]
-                if word in self.tokenizer.word_index:
+                if word in vocab:
                     data[word] = np.array(list(map(float, tokens[1:])))
         return data
 
@@ -479,9 +497,8 @@ class BaseNetwork(BaseEstimator):
         embedding_matrix = np.random.normal(
             emb_mean, emb_std, (self.vocab_size, embedding_size)
         )
-        for word, i in self.tokenizer.word_index.items():
-            if i >= self.vocab_size:
-                break
+        vocab = tuple(self.tokenizer.word_index.items())[: self.vocab_size - 1]
+        for word, i in vocab:
             embedding_vector = embeddings.get(word)
             if embedding_vector is not None:
                 embedding_matrix[i] = embedding_vector
