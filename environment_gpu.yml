@@ -12,5 +12,7 @@ dependencies:
 - pandas=0.24.0
 - python=3.6
 - scikit-learn=0.20.2
+- cudatoolkit=9.0
 - pip:
   - jsonpickle==1.1
+  - gpustat
