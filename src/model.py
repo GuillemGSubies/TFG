@@ -4,6 +4,7 @@
 import datetime
 import json
 import zipfile
+from math import ceil
 from subprocess import check_call
 
 import jsonpickle
@@ -316,13 +317,13 @@ class BaseNetwork(BaseEstimator):
             self.patterngenerator(
                 corpus, batchsize=self.batchsize, infinite=True, mask=self.mask
             ),
-            steps_per_epoch=self.num_train_samples,
+            steps_per_epoch=ceil(self.num_train_samples / self.batchsize),
             callbacks=callbacks,
             epochs=epochs,
             validation_data=self.patterngenerator(
                 corpus, batchsize=self.batchsize, infinite=True, mask=self.testmask
             ),
-            validation_steps=self.num_test_samples,
+            validation_steps=ceil(self.num_test_samples / self.batchsize),
             verbose=verbose,
             **kwargs,
         )
