@@ -14,11 +14,14 @@ from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.layers import (
     LSTM,
     Bidirectional,
+    CuDNNGRU,
     CuDNNLSTM,
     Dense,
     Flatten,
     GlobalAveragePooling1D,
     GlobalMaxPooling1D,
+    GRU,
+    Dropout
 )
 from keras.layers.embeddings import Embedding
 from keras.models import Sequential, load_model
@@ -152,14 +155,15 @@ class BaseNetwork(BaseEstimator):
     def compile(
         self,
         activation="softmax",
-        arch="MaxPooling",
+        kind="AveragePooling",
         embedding=None,
         embedding_output_dim=64,
         gpu=False,
         loss="categorical_crossentropy",
         metrics=None,
         optimizer="adam",
-        lstm=None,
+        arch=None,
+        dropout=None,
         **kwargs,
     ):
         """Builds the architecture of a neural network
@@ -168,13 +172,13 @@ class BaseNetwork(BaseEstimator):
         ----------
         activation : str, optional
             Activation function used in the las layer of the network.
-        arch : str, optional
-            If "Baseline": The architecture will be embedding layer + flatten + dense. This is VERY memory hungry
+        kind : str, optional
+            If "Flatten": The architecture will be embedding layer + flatten + dense. This is VERY memory hungry
             If "MaxPooling": The architecture will be embedding layer + GlobalMaxPooling1D + dense. This is VERY memory hungry
             If "AveragePooling": The architecture will be embedding layer + GlobalAveragePooling1D + dense. This is VERY memory hungry
-            If "LSTM_Embedding": The architectura will be embedding layer + bidirectional
-                LSTM + hidden LSTMs + dense. The hidden LSTMs will be defined by the param
-                "lstm".
+            If "LSTM" or "GRU": The architectura will be embedding layer + bidirectional
+                LSTM (or GRU) + hidden LSTMs (or GRUs) + dense. The hidden LSTMs (GRUs)
+                will be defined by the param "arch".
         embedding : str, optional
             If None, a simple embedding layer will be used. If "fastText", fastText
             embeddings will be used. fastText embeddings must be downloaded and uncompressed
@@ -182,11 +186,13 @@ class BaseNetwork(BaseEstimator):
         embedding_output_dim : int, optional
             Outpud dimension of the embedding layer. It is ignored if the used embedding
             is "fastText" (it has a fixed size of 300)
+        dropout : float, optional
+            If specified a dropout will be aded
         gpu : bool, optional
             If True, CuDNNLSTM networks will be used in stead of LSTM.
         """
 
-        lstm = lstm or [32]
+        arch = arch or [64]
         metrics = metrics or [perplexity_raw]
         self.net = Sequential()
 
@@ -228,17 +234,20 @@ class BaseNetwork(BaseEstimator):
         )
 
         # Core layers
-        if arch == "Baseline":
+        if kind == "Flatten":
             self.net.add(Flatten())
-        elif arch == "MaxPooling":
+        elif kind == "MaxPooling":
             self.net.add(GlobalMaxPooling1D())
-        elif arch == "AveragePooling":
+        elif kind == "AveragePooling":
             self.net.add(GlobalAveragePooling1D())
-        elif arch == "LSTM_Embedding":
-            self.LSTM_Embedding(gpu=gpu, lstm_arch=lstm)
+        elif kind == "LSTM" or kind == "GRU":
+            self.Complex_Network(kind=kind, gpu=gpu, arch=arch)
         else:
             raise Exception("Unknown network architecture")
 
+        # Dropout layer
+        if dropout:
+            self.net.add(Dropout(dropout))
         # Final layer
         self.net.add(Dense(self.vocab_size, activation=activation))
         self.net.compile(loss=loss, optimizer=optimizer, metrics=metrics, **kwargs)
@@ -291,13 +300,13 @@ class BaseNetwork(BaseEstimator):
         if dynamic_lr:
             callbacks.append(
                 ReduceLROnPlateau(
-                    monitor="val_loss", factor=0.8, patience=5, verbose=1, mode="min"
+                    monitor="val_loss", factor=0.8, patience=5, verbose=verbose, mode="min"
                 )
             )
         if earlystop:
             callbacks.append(
                 EarlyStopping(
-                    monitor="val_loss", min_delta=0, patience=10, verbose=1, mode="min"
+                    monitor="val_loss", min_delta=0, patience=10, verbose=verbose, mode="min"
                 )
             )
         if checkpoints:
@@ -310,6 +319,7 @@ class BaseNetwork(BaseEstimator):
                     save_best_only=True,
                     monitor="val_loss",
                     mode="min",
+                    verbose=verbose
                 )
             )
         print("The fit process is starting!")
@@ -368,38 +378,41 @@ class BaseNetwork(BaseEstimator):
     ##################################Aux methods##################################
     ###############################################################################
 
-    def LSTM_Embedding(self, gpu, lstm_arch):
+    def Complex_Network(self, kind, gpu, arch):
         """This Network consists in a embedding layer followed by a bidirectional
-        LSTM and some number of hidden LSTM. There is a dense layer at the end.
-
+        LSTM or GRU and some number of hidden LSTM or GRU. There is a dense layer
+        at the end.
 
         Parameters
         ----------
         gpu : bool
-            If True, CuDNNLSTM networks will be used in stead of LSTM
-        lstm_arch : list of int
-            len(lstm_arch) will be the number of LSTM layers in the model (being the
-            first one, bidirectional) and every elem in lstm_arch is the number of
-            neurons for the ith layer.
+            If True, CuDNN version of the networks will be used.
+        arch : list of int
+            len(arch) will be the number of layers in the model (being the first one,
+            bidirectional) and every elem in arch is the number of neurons for the
+            ith layer.
         """
 
-        lstm = CuDNNLSTM if gpu else LSTM
+        if kind == "LSTM":
+            layer = CuDNNLSTM if gpu else LSTM
+        elif kind == "GRU":
+            layer = CuDNNGRU if gpu else GRU
 
         # Bidirectional layer
-        layer = lstm(
-            lstm_arch.pop(0),
+        bidirect = layer(
+            arch.pop(0),
             input_shape=(self.max_sequence_len,),
-            return_sequences=False if len(lstm_arch) == 0 else True,
+            return_sequences=False if len(arch) == 0 else True,
         )
-        self.net.add(Bidirectional(layer, merge_mode="concat"))
+        self.net.add(Bidirectional(bidirect, merge_mode="concat"))
 
         # Hidden layers
-        for i, elem in enumerate(lstm_arch):
+        for i, elem in enumerate(arch):
             self.net.add(
-                lstm(
+                layer(
                     elem,
                     input_shape=(self.max_sequence_len,),
-                    return_sequences=True if i < len(lstm_arch) - 1 else False,
+                    return_sequences=True if i < len(arch) - 1 else False,
                 )
             )
 
