@@ -32,4 +32,4 @@ source deactivate
 
 ### GPU Version
 
-This version has the same steps. You just have to add `gpu` after the env file name when creating and after the env name when activating.
+This version has the same steps. You just have to add `_gpu` after the env file name when creating and after the env name when activating.
