@@ -493,7 +493,8 @@ class BaseNetwork(BaseEstimator):
 
     def create_embedding_matrix(self, embeddings):
         """Creates a weight matrix for an Embedding layer using an embeddings dictionary
-
+            If a word is not in the embedding dict, its value will be the mean of all the values
+            An improvement to this could be using subword information
         Parameters
         ----------
         embeddings : dict
@@ -507,7 +508,8 @@ class BaseNetwork(BaseEstimator):
         # Compute mean and standard deviation for embeddings
         all_embs = np.stack(embeddings.values())
         emb_mean, emb_std = all_embs.mean(), all_embs.std()
-        embedding_size = len(next(iter(embeddings.values())))
+        # If we are using fastText, this is 300
+        embedding_size = len(embeddings.values()[0])
         embedding_matrix = np.random.normal(
             emb_mean, emb_std, (self.vocab_size, embedding_size)
         )
