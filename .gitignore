@@ -1,3 +1,7 @@
+# Models
+*.json
+*.h5
+
 # Embeddings
 *.vec
 

@@ -509,7 +509,7 @@ class BaseNetwork(BaseEstimator):
         all_embs = np.stack(embeddings.values())
         emb_mean, emb_std = all_embs.mean(), all_embs.std()
         # If we are using fastText, this is 300
-        embedding_size = len(embeddings.values()[0])
+        embedding_size = len(list(embeddings.values())[0])
         embedding_matrix = np.random.normal(
             emb_mean, emb_std, (self.vocab_size, embedding_size)
         )
