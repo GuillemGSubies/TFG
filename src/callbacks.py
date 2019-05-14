@@ -25,21 +25,14 @@ class ModelFullCheckpoint(ModelCheckpoint):
                 current = logs.get(self.monitor)
                 if current is None:
                     print(
-                        f"WARNIGN! Can save best model only with {self.monitor} available, skipping."
+                        f"WARNIGN! Can't save best model only with {self.monitor} available, skipping."
                     )
                 else:
                     if self.monitor_op(current, self.best):
                         if self.verbose > 0:
                             print(
-                                "\nEpoch %05d: %s improved from %0.5f to %0.5f,"
-                                " saving model to %s"
-                                % (
-                                    epoch + 1,
-                                    self.monitor,
-                                    self.best,
-                                    current,
-                                    filepath,
-                                )
+                                f"\nEpoch {epoch + 1}: {self.monitor} improved from {self.best:.3f} to {current:.3f},"
+                                f" saving model to {filepath}"
                             )
                         self.best = current
                         if self.save_weights_only:
@@ -48,13 +41,10 @@ class ModelFullCheckpoint(ModelCheckpoint):
                             self.modelo.save(filepath)
                     else:
                         if self.verbose > 0:
-                            print(
-                                "\nEpoch %05d: %s did not improve from %0.5f"
-                                % (epoch + 1, self.monitor, self.best)
-                            )
+                            print(f"\nEpoch {epoch + 1}: {self.monitor} did not improve from {self.best:.3f}")
             else:
                 if self.verbose > 0:
-                    print("\nEpoch %05d: saving model to %s" % (epoch + 1, filepath))
+                    print(f"\nEpoch {epoch + 1}: saving model to {filepath}")
                 if self.save_weights_only:
                     self.model.save_weights(filepath, overwrite=True)
                 else:

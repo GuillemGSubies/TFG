@@ -13,8 +13,8 @@ def plot_history(history):
 
     loss_list = history.history["loss"]
     val_loss_list = history.history["val_loss"]
-    perplexity_list = history.history["perplexity_raw"]
-    val_perplexity_list = history.history["val_perplexity_raw"]
+    perplexity_list = history.history["perplexity"]
+    val_perplexity_list = history.history["val_perplexity"]
 
     epochs = range(1, len(history.epoch) + 1)
 

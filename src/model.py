@@ -31,7 +31,7 @@ from sklearn.base import BaseEstimator
 
 from .callbacks import ModelFullCheckpoint
 from .generators import batchedpatternsgenerator, infinitegenerator, maskedgenerator
-from .metrics import perplexity_raw
+from .metrics import perplexity
 from .plotting import plot_history as _plot_history
 from .utils import sample
 
@@ -193,7 +193,7 @@ class BaseNetwork(BaseEstimator):
         """
 
         arch = arch or [64]
-        metrics = metrics or [perplexity_raw]
+        metrics = metrics or [perplexity]
         self.net = Sequential()
 
         # Embedding layer
@@ -456,7 +456,7 @@ class BaseNetwork(BaseEstimator):
         with open(f"{path}_attrs.json") as infile:
             kwargs = jsonpickle.decode(json.load(infile))
         kwargs["net"] = load_model(
-            f"{path}_network.h5", custom_objects={"perplexity_raw": perplexity_raw}
+            f"{path}_network.h5", custom_objects={"perplexity": perplexity}
         )
         return cls(**kwargs)
 
