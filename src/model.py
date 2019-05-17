@@ -300,13 +300,13 @@ class BaseNetwork(BaseEstimator):
         if dynamic_lr:
             callbacks.append(
                 ReduceLROnPlateau(
-                    monitor="val_loss", factor=0.8, patience=8, verbose=verbose, mode="min"
+                    monitor="val_perplexity", factor=0.8, patience=8, verbose=verbose, mode="min"
                 )
             )
         if earlystop:
             callbacks.append(
                 EarlyStopping(
-                    monitor="val_loss", min_delta=0, patience=20, verbose=verbose, mode="min"
+                    monitor="val_perplexity", min_delta=0, patience=20, verbose=verbose, mode="min"
                 )
             )
         if checkpoints:
@@ -317,7 +317,7 @@ class BaseNetwork(BaseEstimator):
                     modelo=self,
                     filepath=model_name,
                     save_best_only=True,
-                    monitor="val_loss",
+                    monitor="val_perplexity",
                     mode="min",
                     verbose=verbose
                 )
