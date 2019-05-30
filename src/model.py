@@ -200,20 +200,22 @@ class BaseNetwork(BaseEstimator):
         output_dim = embedding_output_dim
         trainable = True
         weights = None
-        if embedding == "fastText":
-            fastText_file = "crawl-300d-2M.vec"
+        if "fastText" in embedding:
+            if embedding == "fastText":
+                fastText_file = "crawl-300d-2M.vec"
+                zip_fastText_file = f"{fastText_file}.zip"
+                url = f"https://dl.fbaipublicfiles.com/fasttext/vectors-english/{zip_fastText_file}"
+            else:
+                fastText_file = "cc.es.300.vec"
+                zip_fastText_file = f"{fastText_file}.gz"
+                url = f"https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/{zip_fastText_file}"
             try:
                 embeddings = self.load_vectors_words(fastText_file)
                 print("Embedding file loaded sucessfully!")
             except:
-                print(
-                    "No embedding file found, downloading it... (this will take a while)"
-                )
-                check_call(
-                    f"curl -L# 'https://dl.fbaipublicfiles.com/fasttext/vectors-english/{fastText_file}.zip'",
-                    shell=True,
-                )
-                with zipfile.ZipFile(f"{fastText_file}.zip", "r") as file:
+                print("No embedding file found, downloading it... (this will take a while)")
+                check_call(f"curl -L# '{url}'", shell=True)
+                with zipfile.ZipFile(f"{zip_fastText_file}", "r") as file:
                     file.extractall("./")
                 embeddings = self.load_vectors_words(fastText_file)
                 print("Embedding file loaded sucessfully!")
@@ -264,6 +266,7 @@ class BaseNetwork(BaseEstimator):
         epochs=200,
         verbose=1,
         plot=True,
+        restore_best_weights=True,
         **kwargs,
     ):
 
@@ -306,7 +309,12 @@ class BaseNetwork(BaseEstimator):
         if earlystop:
             callbacks.append(
                 EarlyStopping(
-                    monitor="val_perplexity", min_delta=0, patience=20, verbose=verbose, mode="min"
+                    monitor="val_perplexity",
+                    min_delta=0,
+                    patience=20,
+                    verbose=verbose,
+                    mode="min",
+                    restore_best_weights=restore_best_weights
                 )
             )
         if checkpoints:
