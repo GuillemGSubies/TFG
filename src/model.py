@@ -21,7 +21,7 @@ from keras.layers import (
     GlobalAveragePooling1D,
     GlobalMaxPooling1D,
     GRU,
-    Dropout
+    Dropout,
 )
 from keras.layers.embeddings import Embedding
 from keras.models import Sequential, load_model
@@ -37,7 +37,7 @@ from .utils import sample
 
 
 class BaseNetwork(BaseEstimator):
-    """Class to built, train and generate new text with neural networks"""
+    """Class to generate new text with neural networks"""
 
     ###############################################################################
     ##################################Main methods#################################
@@ -93,12 +93,12 @@ class BaseNetwork(BaseEstimator):
 
         Parameters
         ----------
-        data : iterable of strings
+        data : string
             Dataset we want to use
         mask : list of bool, optional
             Mask to be used in the train test split. For instance the default value means
             that every fourth sample generated will be used in the validation step. If mask
-            is None, no train test split will be done.
+            is [True]
 
         Returns
         -------
@@ -106,7 +106,10 @@ class BaseNetwork(BaseEstimator):
             Preprocessed dataset to be used in the fit phase.
         """
 
-        mask = mask or [True, True, True, False]
+        # Prepare masks
+        self.mask = mask or [True, True, True, False]
+        self.testmask = [not x for x in self.mask]
+
         # Basic cleanup
         corpus = data.lower().split("\n")
 
@@ -123,13 +126,6 @@ class BaseNetwork(BaseEstimator):
                 del self.tokenizer.word_docs[word]
                 del self.tokenizer.word_counts[word]
             self.vocab_size = len(self.tokenizer.word_index) + 1
-
-        # Prepare masks
-        if mask is not None:
-            self.testmask = [not x for x in mask]
-            self.mask = mask
-        else:
-            self.mask, self.testmask = [True], [True]
 
         # Total samples
         self.num_train_samples = len(
@@ -213,7 +209,9 @@ class BaseNetwork(BaseEstimator):
                 embeddings = self.load_vectors_words(fastText_file)
                 print("Embedding file loaded sucessfully!")
             except:
-                print("No embedding file found, downloading it... (this will take a while)")
+                print(
+                    "No embedding file found, downloading it... (this will take a while)"
+                )
                 check_call(f"curl -L# '{url}'", shell=True)
                 with zipfile.ZipFile(f"{zip_fastText_file}", "r") as file:
                     file.extractall("./")
@@ -303,7 +301,11 @@ class BaseNetwork(BaseEstimator):
         if dynamic_lr:
             callbacks.append(
                 ReduceLROnPlateau(
-                    monitor="val_perplexity", factor=0.8, patience=8, verbose=verbose, mode="min"
+                    monitor="val_perplexity",
+                    factor=0.8,
+                    patience=8,
+                    verbose=verbose,
+                    mode="min",
                 )
             )
         if earlystop:
@@ -314,7 +316,7 @@ class BaseNetwork(BaseEstimator):
                     patience=20,
                     verbose=verbose,
                     mode="min",
-                    restore_best_weights=restore_best_weights
+                    restore_best_weights=restore_best_weights,
                 )
             )
         if checkpoints:
@@ -327,7 +329,7 @@ class BaseNetwork(BaseEstimator):
                     save_best_only=True,
                     monitor="val_perplexity",
                     mode="min",
-                    verbose=verbose
+                    verbose=verbose,
                 )
             )
         print("The fit process is starting!")
