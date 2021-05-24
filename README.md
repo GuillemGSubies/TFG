@@ -33,3 +33,29 @@ source deactivate
 ### GPU Version
 
 This version has the same steps. You just have to add `_gpu` after the env file name when creating and after the env name when activating.
+
+
+
+### Citation
+
+If you are citing the theorical work and the state-of-the-art:
+
+```
+@misc{subies_2019_mat,
+  title={`Estudio teórico sobre modelos de secuencias con redes neuronales recurrentes para la generación de texto},
+  url={https://github.com/GuillemGSubies/TFG},
+  author={Subies, Guillem García},
+  year={2019}
+} 
+```
+
+If you want to cite the code:
+
+```
+@misc{subies_2019_inf,
+  title={`Estudio práctico sobre modelos de secuencias con redes neuronales recurrentes para la generación de texto},
+  url={https://github.com/GuillemGSubies/TFG},
+  author={Subies, Guillem García},
+  year={2019}
+} 
+```
